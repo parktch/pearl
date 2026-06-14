@@ -10,6 +10,7 @@ public class PearlReport {
     private String createdAt;
     private String result;
     private String authenticity;
+    private Boolean pearlDetected;
     private String pearlType;
     private String imitationType;
     private int confidence;
@@ -50,6 +51,14 @@ public class PearlReport {
 
     public void setAuthenticity(String authenticity) {
         this.authenticity = authenticity;
+    }
+
+    public Boolean getPearlDetected() {
+        return pearlDetected;
+    }
+
+    public void setPearlDetected(Boolean pearlDetected) {
+        this.pearlDetected = pearlDetected;
     }
 
     public String getPearlType() {

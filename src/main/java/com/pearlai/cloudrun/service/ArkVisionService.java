@@ -344,10 +344,14 @@ public class ArkVisionService {
         try {
             Map<String, Object> raw = objectMapper.readValue(extractJson(content), new TypeReference<Map<String, Object>>() {
             });
+            if (!isPearlDetected(raw, content)) {
+                return buildNonPearlReport(raw, content);
+            }
             PearlReport report = new PearlReport();
             report.setId("PP" + System.currentTimeMillis());
             report.setCreatedAt(Instant.now().toString());
             report.setAuthenticity(normalizeAuthenticity(raw));
+            report.setPearlDetected(true);
             report.setPearlType(safeString(raw.get("pearlType"), "淡水珍珠"));
             report.setImitationType(safeString(raw.get("imitationType"), ""));
             report.setConfidence(clamp(toInt(raw.get("confidence"), 72), 1, 99));
@@ -362,7 +366,11 @@ public class ArkVisionService {
             PearlReport fallback = new PearlReport();
             fallback.setId("PP" + System.currentTimeMillis());
             fallback.setCreatedAt(Instant.now().toString());
+            if (isNonPearlText(content)) {
+                return buildNonPearlReport(new HashMap<String, Object>(), content);
+            }
             fallback.setAuthenticity("真");
+            fallback.setPearlDetected(true);
             fallback.setPearlType("淡水珍珠");
             fallback.setConfidence(68);
             fallback.setResult("AI 图片初筛已完成");
@@ -386,8 +394,99 @@ public class ArkVisionService {
         return cleaned.substring(start, end + 1);
     }
 
+    private PearlReport buildNonPearlReport(Map<String, Object> raw, String content) {
+        PearlReport report = new PearlReport();
+        report.setId("PP" + System.currentTimeMillis());
+        report.setCreatedAt(Instant.now().toString());
+        report.setAuthenticity("非珍珠");
+        report.setPearlDetected(false);
+        report.setPearlType("");
+        report.setImitationType("");
+        report.setConfidence(0);
+        report.setResult("未检测到珍珠");
+        report.setQualityGrade(buildNonPearlGrade());
+        report.setAttributes(buildNonPearlAttributes(raw));
+        report.setSummary(safeString(raw.get("summary"), "当前图片未检测到明确珍珠主体，本次结果不进入真假与品质定级。"));
+        List<String> reasons = toStringList(raw.get("reasons"));
+        if (reasons.isEmpty()) {
+            reasons = Arrays.asList(
+                    "图片中未识别到可用于珍珠鉴定的圆珠主体、孔口、光泽或表面纹理。",
+                    "当前照片更像非鉴定目标图片，因此不适合输出珍珠真假、类型和等级。",
+                    "请重新上传珍珠主体清晰、占画面较大的照片。"
+            );
+        }
+        report.setReasons(reasons);
+        List<String> suggestions = toStringList(raw.get("suggestions"));
+        if (suggestions.isEmpty()) {
+            suggestions = Arrays.asList("请拍摄珍珠正面整体照，确保珍珠占画面主体。", "如需完整鉴定，请补充孔口特写、强光纹理照和侧面照片。");
+        }
+        report.setSuggestions(suggestions);
+        report.setRawText(content);
+        return report;
+    }
+
+    private Map<String, Object> buildNonPearlGrade() {
+        Map<String, Object> item = new LinkedHashMap<String, Object>();
+        item.put("grade", "N");
+        item.put("level", "非鉴定目标");
+        item.put("score", 0);
+        item.put("description", "未检测到珍珠主体，不进行瑕疵等级评估");
+        item.put("label", "非鉴定目标");
+        return item;
+    }
+
+    private List<Map<String, Object>> buildNonPearlAttributes(Map<String, Object> raw) {
+        List<Map<String, Object>> items = new ArrayList<Map<String, Object>>();
+        items.add(attribute("图片有效性", "未检测到珍珠", "未发现可用于珍珠鉴定的主体区域", 0));
+        items.add(attribute("珍珠类型", "未识别", "当前图片不进入淡水、海水或仿珠分类", 0));
+        items.add(attribute("亮度", "不适用", "未检测到珍珠主体，无法评估珍珠光泽", 0));
+        items.add(attribute("圆度", "不适用", "未检测到珍珠轮廓，无法评估圆度", 0));
+        items.add(attribute("瑕疵", "不适用", "未检测到珍珠表面，无法评估瑕疵等级", 0));
+        return items;
+    }
+
+    private boolean isPearlDetected(Map<String, Object> raw, String content) {
+        Object pearlDetected = firstValue(raw.get("pearlDetected"), raw.get("isPearl"));
+        if (pearlDetected instanceof Boolean) {
+            return (Boolean) pearlDetected;
+        }
+        if (pearlDetected != null) {
+            String value = String.valueOf(pearlDetected).trim().toLowerCase();
+            if ("false".equals(value) || "0".equals(value) || "否".equals(value) || "no".equals(value)) {
+                return false;
+            }
+        }
+        String text = safeString(raw.get("authenticity"), "") + " "
+                + safeString(raw.get("result"), "") + " "
+                + safeString(raw.get("summary"), "") + " "
+                + String.valueOf(content);
+        return !isNonPearlText(text);
+    }
+
+    private boolean isNonPearlText(String text) {
+        if (!StringUtils.hasText(text)) {
+            return false;
+        }
+        String value = text.toLowerCase();
+        return value.contains("非珍珠")
+                || value.contains("未检测到珍珠")
+                || value.contains("没有检测到珍珠")
+                || value.contains("未识别到珍珠")
+                || value.contains("未显示珍珠")
+                || value.contains("未见珍珠")
+                || value.contains("无珍珠")
+                || value.contains("不包含珍珠")
+                || value.contains("没有珍珠")
+                || value.contains("不是珍珠")
+                || value.contains("not a pearl")
+                || value.contains("no pearl");
+    }
+
     private String normalizeAuthenticity(Map<String, Object> raw) {
         String text = safeString(raw.get("authenticity"), "") + " " + safeString(raw.get("result"), "") + " " + safeString(raw.get("summary"), "");
+        if (isNonPearlText(text)) {
+            return "非珍珠";
+        }
         if (text.contains("假") || text.contains("仿") || text.contains("塑料") || text.contains("玻璃")) {
             return "假";
         }
@@ -397,6 +496,9 @@ public class ArkVisionService {
     private String buildResult(PearlReport report) {
         if ("假".equals(report.getAuthenticity()) && StringUtils.hasText(report.getImitationType())) {
             return "疑似" + report.getImitationType();
+        }
+        if ("非珍珠".equals(report.getAuthenticity())) {
+            return "未检测到珍珠";
         }
         return "疑似" + safeString(report.getPearlType(), "淡水珍珠");
     }
@@ -561,8 +663,10 @@ public class ArkVisionService {
                 modeHint,
                 "必须只输出 JSON，不要输出 Markdown，不要输出额外解释。",
                 "不要声称自己出具权威鉴定证书。结果只能是图片初筛建议。",
-                "即使图片不够完美，也必须基于可见信息给出估算值。不要输出“待复核”“无法判断”“不确定”等状态，可用较低 confidence 表达不确定性。",
-                "authenticity 必须二选一：真 或 假。",
+                "第一步必须判断图片中是否存在明确珍珠主体。若图片不是珍珠、没有珍珠、主体与珍珠鉴定无关，必须输出 pearlDetected=false，authenticity=非珍珠，result=未检测到珍珠，confidence=0，不要继续猜淡水珍珠、海水珍珠或仿珠类型。",
+                "只有 pearlDetected=true 时，才进入真假、类型、亮度、圆度、瑕疵和颜色评估。",
+                "即使珍珠图片不够完美，也必须基于可见信息给出估算值。不要输出“待复核”“无法判断”“不确定”等状态，可用较低 confidence 表达不确定性。",
+                "authenticity 只能从：真、假、非珍珠 中选择。非珍珠只用于图片未检测到珍珠主体的场景。",
                 buildPearlKnowledgeBase(),
                 "真珍珠类型只能从：淡水珍珠、海水珍珠、澳白、Akoya、南洋白珠、南洋金珠、大溪地黑珍珠 中选择。",
                 "假珠类型只能从：塑料仿珠、玻璃仿珠、贝珠、施家珍珠、染色/覆膜珠 中选择。",
@@ -573,8 +677,9 @@ public class ArkVisionService {
                 "颜色系列参考：白色系（纯白、奶白、银白、瓷白）；黑色系（黑、灰黑、蓝黑、褐黑）；红色/粉色系（粉红、浅玫瑰红、浅紫红）；黄色/金色系（浅黄、米黄、金黄、橙黄）；其他色系（紫、青、蓝、绿、古铜色等）。",
                 "JSON 字段：",
                 "{",
-                "  \"result\": \"疑似淡水珍珠/疑似Akoya/疑似塑料仿珠\",",
-                "  \"authenticity\": \"真/假\",",
+                "  \"pearlDetected\": true/false,",
+                "  \"result\": \"疑似淡水珍珠/疑似Akoya/疑似塑料仿珠/未检测到珍珠\",",
+                "  \"authenticity\": \"真/假/非珍珠\",",
                 "  \"pearlType\": \"淡水珍珠/海水珍珠/澳白/Akoya/南洋白珠/南洋金珠/大溪地黑珍珠\",",
                 "  \"imitationType\": \"塑料仿珠/玻璃仿珠/贝珠/施家珍珠/染色/覆膜珠/空字符串\",",
                 "  \"confidence\": 1-99,",
