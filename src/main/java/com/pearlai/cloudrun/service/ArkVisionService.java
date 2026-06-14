@@ -125,15 +125,15 @@ public class ArkVisionService {
                             "delta",
                             StringUtils.hasText(content) ? content : reasoning,
                             null,
-                            answerText.toString(),
-                            reasoningText.toString()
+                            content,
+                            reasoning
                     );
                 }
             }
 
             String finalText = StringUtils.hasText(answerText.toString()) ? answerText.toString() : reasoningText.toString();
             PearlReport report = normalizeReport(finalText);
-            emitStreamEvent(outputStream, "report", "AI 鉴定完成，正在生成报告...", report, answerText.toString(), reasoningText.toString());
+            emitStreamEvent(outputStream, "report", "AI 鉴定完成，正在生成报告...", report, "", "");
         } catch (Exception error) {
             emitErrorEvent(outputStream, error.getMessage());
         } finally {
