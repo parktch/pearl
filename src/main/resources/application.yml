@@ -1,0 +1,20 @@
+server:
+  port: ${PORT:80}
+
+spring:
+  application:
+    name: pearl-cloudrun-springboot
+  jackson:
+    default-property-inclusion: non_null
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+
+ark:
+  api-url: ${ARK_API_URL:https://ark.cn-beijing.volces.com/api/v3/chat/completions}
+  api-key: ${ARK_API_KEY:}
+  model: ${ARK_MODEL:doubao-seed-1-8-251228}
+  timeout-ms: ${ARK_TIMEOUT_MS:60000}
