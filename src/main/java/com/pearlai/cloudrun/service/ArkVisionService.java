@@ -84,31 +84,34 @@ public class ArkVisionService {
 
     public void streamAnalyze(PearlAnalyzeRequest request, OutputStream outputStream) {
         try {
+            final int[] deltaCount = new int[]{0};
             analyzeWithProgress(request, new StreamProgressListener() {
                 @Override
                 public void onStart(String message) {
-                    emitStreamEvent(outputStream, "start", message, null, "", message);
+                    emitStreamEvent(outputStream, "start", "正在读取图片，准备开始珍珠初筛。", null, "", "正在读取图片，准备开始珍珠初筛。");
                 }
 
                 @Override
                 public void onDelta(String content, String reasoning) {
+                    deltaCount[0] += 1;
+                    String readableText = buildReadableStreamProgress(deltaCount[0]);
                     emitStreamEvent(
                             outputStream,
                             "delta",
-                            StringUtils.hasText(content) ? content : reasoning,
+                            readableText,
                             null,
-                            content,
-                            reasoning
+                            "",
+                            readableText
                     );
                 }
 
                 @Override
                 public void onReport(PearlReport report) {
-                    emitStreamEvent(outputStream, "report", "AI 鉴定完成，正在生成报告...", report, "", "");
+                    emitStreamEvent(outputStream, "report", "分析完成，正在生成最终鉴定报告。", report, "", "分析完成，正在生成最终鉴定报告。");
                 }
             });
         } catch (Exception error) {
-            emitErrorEvent(outputStream, error.getMessage());
+            emitErrorEvent(outputStream, "AI 鉴定服务暂时不可用，请稍后重试。");
         }
     }
 
@@ -281,6 +284,22 @@ public class ArkVisionService {
             outputStream.flush();
         } catch (Exception ignored) {
         }
+    }
+
+    private String buildReadableStreamProgress(int deltaCount) {
+        if (deltaCount < 8) {
+            return "正在确认图片里是否有清晰的珍珠主体。";
+        }
+        if (deltaCount < 16) {
+            return "正在观察轮廓、孔口和表面纹理。";
+        }
+        if (deltaCount < 24) {
+            return "正在分析光泽层次、反光强弱和伴色变化。";
+        }
+        if (deltaCount < 32) {
+            return "正在综合判断真假、类型和可信度。";
+        }
+        return "正在整理识别依据，准备生成报告。";
     }
 
     private String readAll(InputStream inputStream) throws Exception {
