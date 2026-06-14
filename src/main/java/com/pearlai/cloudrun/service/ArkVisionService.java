@@ -111,7 +111,7 @@ public class ArkVisionService {
                 }
             });
         } catch (Exception error) {
-            emitErrorEvent(outputStream, "AI 鉴定服务暂时不可用，请稍后重试。");
+            emitErrorEvent(outputStream, "鉴定服务暂时不可用，请稍后重试。");
         }
     }
 
@@ -120,7 +120,7 @@ public class ArkVisionService {
         StringBuilder answerText = new StringBuilder();
         StringBuilder reasoningText = new StringBuilder();
         if (listener != null) {
-            listener.onStart("AI 正在鉴定图片，请稍候...");
+            listener.onStart("正在鉴定图片，请稍候...");
         }
 
         HttpURLConnection connection = null;
@@ -278,7 +278,7 @@ public class ArkVisionService {
         try {
             Map<String, Object> event = new LinkedHashMap<String, Object>();
             event.put("type", "error");
-            event.put("message", StringUtils.hasText(message) ? message : "AI 鉴定服务异常");
+            event.put("message", StringUtils.hasText(message) ? message : "鉴定服务异常");
             outputStream.write(objectMapper.writeValueAsString(event).getBytes(StandardCharsets.UTF_8));
             outputStream.write('\n');
             outputStream.flush();
@@ -377,7 +377,7 @@ public class ArkVisionService {
             report.setResult(safeString(raw.get("result"), buildResult(report)));
             report.setQualityGrade(buildQualityGrade(raw, report.getConfidence()));
             report.setAttributes(buildAttributes(raw, report.getAuthenticity()));
-            report.setSummary(safeString(raw.get("summary"), "AI 已完成图片初筛，并根据当前照片给出估算结果。"));
+            report.setSummary(safeString(raw.get("summary"), "已完成图片初筛，并根据当前照片给出估算结果。"));
             report.setReasons(toStringList(raw.get("reasons")));
             report.setSuggestions(toStringList(raw.get("suggestions")));
             return report;
@@ -392,7 +392,7 @@ public class ArkVisionService {
             fallback.setPearlDetected(true);
             fallback.setPearlType("淡水珍珠");
             fallback.setConfidence(68);
-            fallback.setResult("AI 图片初筛已完成");
+            fallback.setResult("图片初筛已完成");
             fallback.setQualityGrade(buildGrade("C", 68));
             fallback.setAttributes(defaultAttributes());
             fallback.setSummary("模型返回内容未能解析为结构化 JSON，已按当前图片给出保守估算。");
@@ -682,6 +682,7 @@ public class ArkVisionService {
                 "你是一名谨慎的珍珠图片初筛助手。请根据用户上传的珍珠照片做初步判断。",
                 modeHint,
                 "必须只输出 JSON，不要输出 Markdown，不要输出额外解释。",
+                "除最终 JSON 字段名外，不要输出英文单词、英文说明或英文推理过程；所有可读说明必须使用中文。",
                 "不要声称自己出具权威鉴定证书。结果只能是图片初筛建议。",
                 "第一步必须判断图片中是否存在明确珍珠主体。若图片不是珍珠、没有珍珠、主体与珍珠鉴定无关，必须输出 pearlDetected=false，authenticity=非珍珠，result=未检测到珍珠，confidence=0，不要继续猜淡水珍珠、海水珍珠或仿珠类型。",
                 "只有 pearlDetected=true 时，才进入真假、类型、亮度、圆度、瑕疵和颜色评估。",

@@ -39,9 +39,9 @@ public class PearlAnalyzeJobService {
         PearlAnalyzeJob job = new PearlAnalyzeJob();
         job.setJobId("JOB" + UUID.randomUUID().toString().replace("-", ""));
         job.setStatus("PENDING");
-        job.setProgressText("AI 鉴定任务已提交，正在排队分析...");
+        job.setProgressText("鉴定任务已提交，正在排队分析...");
         job.setAnswerText("");
-        job.setReasoningText("AI 鉴定任务已提交，正在排队分析...");
+        job.setReasoningText("鉴定任务已提交，正在排队分析...");
         job.setProgressPercent(12);
         job.setCreatedAt(now);
         job.setUpdatedAt(now);
@@ -72,13 +72,11 @@ public class PearlAnalyzeJobService {
         }
 
         try {
-            final StringBuilder answerText = new StringBuilder();
-            final StringBuilder reasoningText = new StringBuilder();
             final int[] progressPercent = new int[]{18};
             final int[] deltaCount = new int[]{0};
             job.setStatus("RUNNING");
-            job.setProgressText("AI 正在读取图片特征...");
-            job.setReasoningText("AI 正在读取图片特征...");
+            job.setProgressText("正在读取图片特征...");
+            job.setReasoningText("正在读取图片特征...");
             job.setProgressPercent(progressPercent[0]);
             job.setUpdatedAt(Instant.now().toString());
             PearlReport report = arkVisionService.analyzeWithProgress(request, new ArkVisionService.StreamProgressListener() {
@@ -89,12 +87,6 @@ public class PearlAnalyzeJobService {
 
                 @Override
                 public void onDelta(String content, String reasoning) {
-                    if (content != null && content.length() > 0) {
-                        answerText.append(content);
-                    }
-                    if (reasoning != null && reasoning.length() > 0) {
-                        reasoningText.append(reasoning);
-                    }
                     progressPercent[0] = Math.min(88, progressPercent[0] + 2);
                     deltaCount[0] += 1;
                     String progressText = buildReadableProgress(deltaCount[0], progressPercent[0]);
@@ -116,9 +108,9 @@ public class PearlAnalyzeJobService {
         } catch (Exception error) {
             job.setError(error.getMessage());
             job.setStatus("FAILED");
-            job.setProgressText("AI 鉴定任务失败，请稍后重试。");
+            job.setProgressText("鉴定任务失败，请稍后重试。");
             job.setAnswerText("");
-            job.setReasoningText("AI 鉴定任务失败，请稍后重试。");
+            job.setReasoningText("鉴定任务失败，请稍后重试。");
             job.setUpdatedAt(Instant.now().toString());
         }
     }
