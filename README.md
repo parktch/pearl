@@ -8,8 +8,12 @@
 - `GET /api/health`：接口健康检查
 - `POST /api/pearl/analyze`：珍珠图片 AI 初筛接口
 - `POST /api/pearl/analyze/stream`：珍珠图片 AI 初筛流式接口，返回 `application/x-ndjson`
+- `POST /api/pearl/analyze/job`：提交异步鉴定任务，适合小程序 `wx.cloud.callContainer`
+- `GET /api/pearl/analyze/job/{jobId}`：轮询异步鉴定任务状态
 
 后端负责保存火山方舟密钥、转发图片给豆包视觉模型、解析模型 JSON，并返回小程序结果页可直接使用的数据结构。
+
+微信云托管 `callContainer` 同步请求可能被网关超时中断，因此小程序默认使用异步任务接口：先提交 `jobId`，再轮询状态。当前任务状态保存在进程内存中，`container.config.json` 将实例数固定为 1，避免轮询打到不同实例。生产环境如需多实例扩容，应改为 Redis/MySQL 存储任务状态。
 
 ## 为什么 ARK_API_KEY 放后端环境变量
 

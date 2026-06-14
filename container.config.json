@@ -1,7 +1,7 @@
 {
   "containerPort": 80,
-  "minNum": 0,
-  "maxNum": 10,
+  "minNum": 1,
+  "maxNum": 1,
   "cpu": 0.5,
   "mem": 1,
   "policyType": "cpu",
