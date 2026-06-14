@@ -17,13 +17,13 @@ public class PearlAnalyzeJobService {
 
     private static final String[] READABLE_PROGRESS = new String[]{
             "正在确认图片里是否有清晰的珍珠主体。",
-            "正在观察珍珠轮廓，判断是否适合继续分析。",
-            "正在查看表面反光，区分柔和光泽和表面浮光。",
-            "正在寻找纹理、孔口和边缘细节。",
-            "正在对比颜色分布和伴色变化。",
-            "正在综合判断真假、类型和可信度。",
-            "正在整理亮度、圆度、瑕疵和颜色维度。",
-            "正在把识别依据整理成易读报告。"
+            "正在观察轮廓和圆度，判断是正圆、近圆还是异形。",
+            "正在查看表面反光，评估亮度是强光、中光还是弱光。",
+            "正在检查表面细节，估算瑕疵等级和可见瑕疵面积。",
+            "正在寻找纹理、孔口和边缘细节，辅助判断真假。",
+            "正在对比颜色分布、伴色变化和染色痕迹。",
+            "正在综合珍珠类型、亮度、圆度、瑕疵和颜色。",
+            "正在整理识别依据，准备生成易读报告。"
     };
 
     private final ArkVisionService arkVisionService;
@@ -74,15 +74,18 @@ public class PearlAnalyzeJobService {
         try {
             final int[] progressPercent = new int[]{18};
             final int[] deltaCount = new int[]{0};
+            final StringBuilder readableLog = new StringBuilder();
             job.setStatus("RUNNING");
+            appendReadableStage(readableLog, "正在读取图片特征...");
             job.setProgressText("正在读取图片特征...");
-            job.setReasoningText("正在读取图片特征...");
+            job.setReasoningText(readableLog.toString());
             job.setProgressPercent(progressPercent[0]);
             job.setUpdatedAt(Instant.now().toString());
             PearlReport report = arkVisionService.analyzeWithProgress(request, new ArkVisionService.StreamProgressListener() {
                 @Override
                 public void onStart(String message) {
-                    updateProgress(jobId, message, "", message, 24);
+                    appendReadableStage(readableLog, "正在确认图片是否适合做珍珠鉴定。");
+                    updateProgress(jobId, "正在确认图片是否适合做珍珠鉴定。", "", readableLog.toString(), 24);
                 }
 
                 @Override
@@ -90,19 +93,23 @@ public class PearlAnalyzeJobService {
                     progressPercent[0] = Math.min(88, progressPercent[0] + 2);
                     deltaCount[0] += 1;
                     String progressText = buildReadableProgress(deltaCount[0], progressPercent[0]);
-                    updateProgress(jobId, progressText, "", progressText, progressPercent[0]);
+                    appendReadableStage(readableLog, progressText);
+                    updateProgress(jobId, progressText, "", readableLog.toString(), progressPercent[0]);
                 }
 
                 @Override
                 public void onReport(PearlReport report) {
-                    updateProgress(jobId, "分析完成，正在生成最终鉴定报告。", "", "分析完成，正在生成最终鉴定报告。", 96);
+                    appendCoreReviewStages(readableLog);
+                    appendReadableStage(readableLog, "分析完成，正在生成最终鉴定报告。");
+                    updateProgress(jobId, "分析完成，正在生成最终鉴定报告。", "", readableLog.toString(), 96);
                 }
             });
             job.setReport(report);
             job.setStatus("SUCCEEDED");
             job.setProgressText("分析完成，正在打开鉴定报告。");
             job.setAnswerText("");
-            job.setReasoningText("分析完成，正在打开鉴定报告。");
+            appendReadableStage(readableLog, "分析完成，正在打开鉴定报告。");
+            job.setReasoningText(readableLog.toString());
             job.setProgressPercent(100);
             job.setUpdatedAt(Instant.now().toString());
         } catch (Exception error) {
@@ -116,12 +123,32 @@ public class PearlAnalyzeJobService {
     }
 
     private String buildReadableProgress(int deltaCount, int progressPercent) {
-        int index = Math.min(READABLE_PROGRESS.length - 1, Math.max(0, deltaCount / 8));
+        int index = Math.min(READABLE_PROGRESS.length - 1, Math.max(0, deltaCount / 4));
         String message = READABLE_PROGRESS[index];
         if (progressPercent >= 80) {
             return "正在做最后的综合判断，并准备生成报告。";
         }
         return message;
+    }
+
+    private void appendReadableStage(StringBuilder readableLog, String message) {
+        if (message == null || message.length() == 0) {
+            return;
+        }
+        if (readableLog.indexOf(message) >= 0) {
+            return;
+        }
+        if (readableLog.length() > 0) {
+            readableLog.append("\n");
+        }
+        readableLog.append(message);
+    }
+
+    private void appendCoreReviewStages(StringBuilder readableLog) {
+        appendReadableStage(readableLog, "已完成亮度评估：重点查看高光强弱、反光边缘和光泽层次。");
+        appendReadableStage(readableLog, "已完成圆度评估：重点查看轮廓是否对称、是否偏椭圆或异形。");
+        appendReadableStage(readableLog, "已完成瑕疵评估：重点查看针点、坑点、划痕和瑕疵面积。");
+        appendReadableStage(readableLog, "已完成颜色评估：重点查看颜色分布、伴色过渡和异常染色痕迹。");
     }
 
     private void updateProgress(String jobId, String progressText, String answerText, String reasoningText, int progressPercent) {
