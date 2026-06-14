@@ -15,6 +15,14 @@ import org.springframework.util.StringUtils;
 import org.springframework.web.client.HttpStatusCodeException;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.BufferedReader;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
+import java.net.HttpURLConnection;
+import java.net.URL;
+import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -48,7 +56,7 @@ public class ArkVisionService {
 
     public PearlReport analyze(PearlAnalyzeRequest request) {
         validateRequest(request);
-        Map<String, Object> arkBody = buildArkBody(request);
+        Map<String, Object> arkBody = buildArkBody(request, false);
         HttpHeaders headers = new HttpHeaders();
         headers.setContentType(MediaType.APPLICATION_JSON);
         headers.setBearerAuth(arkProperties.getApiKey());
@@ -66,6 +74,75 @@ public class ArkVisionService {
         }
     }
 
+    public void streamAnalyze(PearlAnalyzeRequest request, OutputStream outputStream) {
+        validateRequest(request);
+        StringBuilder answerText = new StringBuilder();
+        StringBuilder reasoningText = new StringBuilder();
+        emitStreamEvent(outputStream, "start", "AI 正在鉴定图片，请稍候...", null, "", "AI 正在鉴定图片，请稍候...");
+
+        HttpURLConnection connection = null;
+        try {
+            URL url = new URL(arkProperties.getApiUrl());
+            connection = (HttpURLConnection) url.openConnection();
+            connection.setRequestMethod("POST");
+            connection.setConnectTimeout(arkProperties.getTimeoutMs());
+            connection.setReadTimeout(arkProperties.getTimeoutMs());
+            connection.setDoOutput(true);
+            connection.setRequestProperty("Content-Type", "application/json");
+            connection.setRequestProperty("Authorization", "Bearer " + arkProperties.getApiKey());
+
+            Map<String, Object> arkBody = buildArkBody(request, true);
+            OutputStream requestStream = connection.getOutputStream();
+            objectMapper.writeValue(requestStream, arkBody);
+            requestStream.flush();
+            requestStream.close();
+
+            int statusCode = connection.getResponseCode();
+            InputStream responseStream = statusCode >= 400 ? connection.getErrorStream() : connection.getInputStream();
+            if (statusCode >= 400) {
+                String errorText = readAll(responseStream);
+                throw new IllegalStateException("Ark API error " + statusCode + ": " + errorText);
+            }
+
+            BufferedReader reader = new BufferedReader(new InputStreamReader(responseStream, StandardCharsets.UTF_8));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                Map<String, String> delta = parseArkStreamDelta(line);
+                if (delta == null) {
+                    continue;
+                }
+                String content = delta.get("content");
+                String reasoning = delta.get("reasoning");
+                if (StringUtils.hasText(content)) {
+                    answerText.append(content);
+                }
+                if (StringUtils.hasText(reasoning)) {
+                    reasoningText.append(reasoning);
+                }
+                if (StringUtils.hasText(content) || StringUtils.hasText(reasoning)) {
+                    emitStreamEvent(
+                            outputStream,
+                            "delta",
+                            StringUtils.hasText(content) ? content : reasoning,
+                            null,
+                            answerText.toString(),
+                            reasoningText.toString()
+                    );
+                }
+            }
+
+            String finalText = StringUtils.hasText(answerText.toString()) ? answerText.toString() : reasoningText.toString();
+            PearlReport report = normalizeReport(finalText);
+            emitStreamEvent(outputStream, "report", "AI 鉴定完成，正在生成报告...", report, answerText.toString(), reasoningText.toString());
+        } catch (Exception error) {
+            emitErrorEvent(outputStream, error.getMessage());
+        } finally {
+            if (connection != null) {
+                connection.disconnect();
+            }
+        }
+    }
+
     private void validateRequest(PearlAnalyzeRequest request) {
         if (!StringUtils.hasText(arkProperties.getApiKey())) {
             throw new IllegalStateException("ARK_API_KEY is not configured");
@@ -78,7 +155,7 @@ public class ArkVisionService {
         }
     }
 
-    private Map<String, Object> buildArkBody(PearlAnalyzeRequest request) {
+    private Map<String, Object> buildArkBody(PearlAnalyzeRequest request, boolean stream) {
         List<Map<String, Object>> content = new ArrayList<Map<String, Object>>();
         for (ImageInput image : request.getImages()) {
             Map<String, Object> imageUrl = new LinkedHashMap<String, Object>();
@@ -102,9 +179,85 @@ public class ArkVisionService {
         Map<String, Object> body = new LinkedHashMap<String, Object>();
         body.put("model", arkProperties.getModel());
         body.put("messages", Arrays.asList(message));
-        body.put("stream", false);
+        body.put("stream", stream);
         body.put("temperature", 0.2);
         return body;
+    }
+
+    private Map<String, String> parseArkStreamDelta(String line) {
+        String trimmed = line == null ? "" : line.trim();
+        if (!StringUtils.hasText(trimmed) || "[DONE]".equals(trimmed)) {
+            return null;
+        }
+        String payload = trimmed.startsWith("data:") ? trimmed.substring(5).trim() : trimmed;
+        if (!StringUtils.hasText(payload) || "[DONE]".equals(payload)) {
+            return null;
+        }
+        try {
+            Map<String, Object> chunk = objectMapper.readValue(payload, new TypeReference<Map<String, Object>>() {
+            });
+            Object choicesValue = chunk.get("choices");
+            if (!(choicesValue instanceof List) || ((List) choicesValue).isEmpty()) {
+                return null;
+            }
+            Object choiceValue = ((List) choicesValue).get(0);
+            if (!(choiceValue instanceof Map)) {
+                return null;
+            }
+            Object deltaValue = ((Map) choiceValue).get("delta");
+            if (!(deltaValue instanceof Map)) {
+                return null;
+            }
+            Map deltaMap = (Map) deltaValue;
+            Map<String, String> delta = new HashMap<String, String>();
+            delta.put("content", safeString(deltaMap.get("content"), ""));
+            delta.put("reasoning", safeString(deltaMap.get("reasoning_content"), ""));
+            return delta;
+        } catch (Exception ignored) {
+            return null;
+        }
+    }
+
+    private void emitStreamEvent(OutputStream outputStream, String type, String message, PearlReport report, String answerText, String reasoningText) {
+        try {
+            Map<String, Object> event = new LinkedHashMap<String, Object>();
+            event.put("type", type);
+            event.put("message", message);
+            event.put("answerText", answerText);
+            event.put("reasoningText", reasoningText);
+            if (report != null) {
+                event.put("report", report);
+            }
+            outputStream.write(objectMapper.writeValueAsString(event).getBytes(StandardCharsets.UTF_8));
+            outputStream.write('\n');
+            outputStream.flush();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private void emitErrorEvent(OutputStream outputStream, String message) {
+        try {
+            Map<String, Object> event = new LinkedHashMap<String, Object>();
+            event.put("type", "error");
+            event.put("message", StringUtils.hasText(message) ? message : "AI 鉴定服务异常");
+            outputStream.write(objectMapper.writeValueAsString(event).getBytes(StandardCharsets.UTF_8));
+            outputStream.write('\n');
+            outputStream.flush();
+        } catch (Exception ignored) {
+        }
+    }
+
+    private String readAll(InputStream inputStream) throws Exception {
+        if (inputStream == null) {
+            return "";
+        }
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] data = new byte[1024];
+        int read;
+        while ((read = inputStream.read(data)) != -1) {
+            buffer.write(data, 0, read);
+        }
+        return new String(buffer.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private String normalizeImageUrl(ImageInput image) {

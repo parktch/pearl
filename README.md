@@ -7,6 +7,7 @@
 - `GET /`：服务健康检查
 - `GET /api/health`：接口健康检查
 - `POST /api/pearl/analyze`：珍珠图片 AI 初筛接口
+- `POST /api/pearl/analyze/stream`：珍珠图片 AI 初筛流式接口，返回 `application/x-ndjson`
 
 后端负责保存火山方舟密钥、转发图片给豆包视觉模型、解析模型 JSON，并返回小程序结果页可直接使用的数据结构。
 
@@ -42,6 +43,28 @@ curl -X POST http://localhost:80/api/pearl/analyze \
     ]
   }'
 ```
+
+## 流式接口
+
+小程序默认建议调用：
+
+```text
+POST /api/pearl/analyze/stream
+```
+
+响应按行返回 NDJSON：
+
+```json
+{"type":"start","message":"AI 正在鉴定图片，请稍候..."}
+{"type":"delta","message":"正在观察光泽","reasoningText":"正在观察光泽","answerText":""}
+{"type":"report","message":"AI 鉴定完成，正在生成报告...","report":{}}
+```
+
+其中：
+
+- `delta`：用于小程序实时展示 AI 分析过程。
+- `report`：最终结构化报告，小程序保存历史和跳转结果页使用。
+- `error`：服务端或火山方舟异常。
 
 也可以传公网图片：
 
