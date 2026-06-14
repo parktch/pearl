@@ -474,10 +474,11 @@ public class ArkVisionService {
                 || value.contains("未识别到珍珠")
                 || value.contains("未显示珍珠")
                 || value.contains("未见珍珠")
-                || value.contains("无珍珠")
-                || value.contains("不包含珍珠")
-                || value.contains("没有珍珠")
-                || value.contains("不是珍珠")
+                || value.contains("无珍珠主体")
+                || value.contains("不包含珍珠主体")
+                || value.contains("没有珍珠主体")
+                || value.contains("不是珍珠图片")
+                || value.contains("图片不是珍珠")
                 || value.contains("not a pearl")
                 || value.contains("no pearl");
     }
