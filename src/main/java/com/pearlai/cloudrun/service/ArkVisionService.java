@@ -54,6 +54,14 @@ public class ArkVisionService {
         this.objectMapper = objectMapper;
     }
 
+    public interface StreamProgressListener {
+        void onStart(String message);
+
+        void onDelta(String content, String reasoning);
+
+        void onReport(PearlReport report);
+    }
+
     public PearlReport analyze(PearlAnalyzeRequest request) {
         validateRequest(request);
         Map<String, Object> arkBody = buildArkBody(request, false);
@@ -75,10 +83,42 @@ public class ArkVisionService {
     }
 
     public void streamAnalyze(PearlAnalyzeRequest request, OutputStream outputStream) {
+        try {
+            analyzeWithProgress(request, new StreamProgressListener() {
+                @Override
+                public void onStart(String message) {
+                    emitStreamEvent(outputStream, "start", message, null, "", message);
+                }
+
+                @Override
+                public void onDelta(String content, String reasoning) {
+                    emitStreamEvent(
+                            outputStream,
+                            "delta",
+                            StringUtils.hasText(content) ? content : reasoning,
+                            null,
+                            content,
+                            reasoning
+                    );
+                }
+
+                @Override
+                public void onReport(PearlReport report) {
+                    emitStreamEvent(outputStream, "report", "AI 鉴定完成，正在生成报告...", report, "", "");
+                }
+            });
+        } catch (Exception error) {
+            emitErrorEvent(outputStream, error.getMessage());
+        }
+    }
+
+    public PearlReport analyzeWithProgress(PearlAnalyzeRequest request, StreamProgressListener listener) {
         validateRequest(request);
         StringBuilder answerText = new StringBuilder();
         StringBuilder reasoningText = new StringBuilder();
-        emitStreamEvent(outputStream, "start", "AI 正在鉴定图片，请稍候...", null, "", "AI 正在鉴定图片，请稍候...");
+        if (listener != null) {
+            listener.onStart("AI 正在鉴定图片，请稍候...");
+        }
 
         HttpURLConnection connection = null;
         try {
@@ -119,23 +159,19 @@ public class ArkVisionService {
                 if (StringUtils.hasText(reasoning)) {
                     reasoningText.append(reasoning);
                 }
-                if (StringUtils.hasText(content) || StringUtils.hasText(reasoning)) {
-                    emitStreamEvent(
-                            outputStream,
-                            "delta",
-                            StringUtils.hasText(content) ? content : reasoning,
-                            null,
-                            content,
-                            reasoning
-                    );
+                if (listener != null && (StringUtils.hasText(content) || StringUtils.hasText(reasoning))) {
+                    listener.onDelta(content, reasoning);
                 }
             }
 
             String finalText = StringUtils.hasText(answerText.toString()) ? answerText.toString() : reasoningText.toString();
             PearlReport report = normalizeReport(finalText);
-            emitStreamEvent(outputStream, "report", "AI 鉴定完成，正在生成报告...", report, "", "");
+            if (listener != null) {
+                listener.onReport(report);
+            }
+            return report;
         } catch (Exception error) {
-            emitErrorEvent(outputStream, error.getMessage());
+            throw new IllegalStateException(error.getMessage(), error);
         } finally {
             if (connection != null) {
                 connection.disconnect();

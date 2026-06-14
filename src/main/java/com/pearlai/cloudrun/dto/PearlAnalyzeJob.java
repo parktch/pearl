@@ -6,6 +6,10 @@ public class PearlAnalyzeJob {
     private String status;
     private PearlReport report;
     private String error;
+    private String progressText;
+    private String answerText;
+    private String reasoningText;
+    private Integer progressPercent;
     private String createdAt;
     private String updatedAt;
 
@@ -39,6 +43,38 @@ public class PearlAnalyzeJob {
 
     public void setError(String error) {
         this.error = error;
+    }
+
+    public String getProgressText() {
+        return progressText;
+    }
+
+    public void setProgressText(String progressText) {
+        this.progressText = progressText;
+    }
+
+    public String getAnswerText() {
+        return answerText;
+    }
+
+    public void setAnswerText(String answerText) {
+        this.answerText = answerText;
+    }
+
+    public String getReasoningText() {
+        return reasoningText;
+    }
+
+    public void setReasoningText(String reasoningText) {
+        this.reasoningText = reasoningText;
+    }
+
+    public Integer getProgressPercent() {
+        return progressPercent;
+    }
+
+    public void setProgressPercent(Integer progressPercent) {
+        this.progressPercent = progressPercent;
     }
 
     public String getCreatedAt() {
