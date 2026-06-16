@@ -14,6 +14,7 @@ public class PearlReport {
     private String pearlType;
     private String imitationType;
     private int confidence;
+    private Map<String, Object> priceEstimate;
     private Map<String, Object> qualityGrade;
     private List<Map<String, Object>> attributes = new ArrayList<>();
     private String summary;
@@ -83,6 +84,14 @@ public class PearlReport {
 
     public void setConfidence(int confidence) {
         this.confidence = confidence;
+    }
+
+    public Map<String, Object> getPriceEstimate() {
+        return priceEstimate;
+    }
+
+    public void setPriceEstimate(Map<String, Object> priceEstimate) {
+        this.priceEstimate = priceEstimate;
     }
 
     public Map<String, Object> getQualityGrade() {

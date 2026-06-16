@@ -375,6 +375,7 @@ public class ArkVisionService {
             report.setImitationType(safeString(raw.get("imitationType"), ""));
             report.setConfidence(clamp(toInt(raw.get("confidence"), 72), 1, 99));
             report.setResult(cleanResultPrefix(safeString(raw.get("result"), buildResult(report))));
+            report.setPriceEstimate(buildPriceEstimate(raw, report.getAuthenticity(), report.getPearlType()));
             report.setQualityGrade(buildQualityGrade(raw, report.getConfidence()));
             report.setAttributes(buildAttributes(raw, report.getAuthenticity()));
             report.setSummary(safeString(raw.get("summary"), "已完成图片初筛，并根据当前照片给出估算结果。"));
@@ -393,6 +394,7 @@ public class ArkVisionService {
             fallback.setPearlType("淡水珍珠");
             fallback.setConfidence(68);
             fallback.setResult("图片初筛已完成");
+            fallback.setPriceEstimate(defaultPriceEstimate("淡水珍珠", "入门", "100-300"));
             fallback.setQualityGrade(buildGrade("C", 68));
             fallback.setAttributes(defaultAttributes());
             fallback.setSummary("模型返回内容未能解析为结构化 JSON，已按当前图片给出保守估算。");
@@ -423,6 +425,7 @@ public class ArkVisionService {
         report.setImitationType("");
         report.setConfidence(0);
         report.setResult("未检测到珍珠");
+        report.setPriceEstimate(null);
         report.setQualityGrade(buildNonPearlGrade());
         report.setAttributes(buildNonPearlAttributes(raw));
         report.setSummary(safeString(raw.get("summary"), "当前图片未检测到明确珍珠主体，本次结果不进入真假与品质定级。"));
@@ -528,6 +531,81 @@ public class ArkVisionService {
             return value;
         }
         return value.replace("疑似", "").trim();
+    }
+
+    private Map<String, Object> buildPriceEstimate(Map<String, Object> raw, String authenticity, String pearlType) {
+        if (!"真".equals(authenticity)) {
+            return null;
+        }
+        Map<String, Object> price = toMap(raw.get("priceEstimate"));
+        String range = safeString(firstValue(price.get("range"), price.get("priceRange")), "");
+        String tier = safeString(price.get("tier"), "");
+        String basis = safeString(price.get("basis"), "");
+        String note = safeString(price.get("note"), "");
+        if (!StringUtils.hasText(range)) {
+            String grade = normalizeGrade(firstText(toMap(raw.get("qualityGrade")).get("grade"), toMap(raw.get("blemish")).get("grade")));
+            String luster = safeString(toMap(raw.get("luster")).get("level"), "");
+            tier = inferPriceTier(grade, luster);
+            range = lookupPriceRange(pearlType, tier);
+        }
+        if (!StringUtils.hasText(range)) {
+            return null;
+        }
+        if (!StringUtils.hasText(tier)) {
+            tier = "参考";
+        }
+        if (!StringUtils.hasText(basis)) {
+            basis = "按 9-10mm 单颗珍珠参考表，结合图片估算等级给出";
+        }
+        if (!StringUtils.hasText(note)) {
+            note = "仅为图片初筛粗估价格带，不作为交易定价或回收报价";
+        }
+        return defaultPriceEstimate(pearlType, tier, range, basis, note);
+    }
+
+    private Map<String, Object> defaultPriceEstimate(String pearlType, String tier, String range) {
+        return defaultPriceEstimate(pearlType, tier, range, "按 9-10mm 单颗珍珠参考表估算", "仅为图片初筛粗估价格带，不作为交易定价或回收报价");
+    }
+
+    private Map<String, Object> defaultPriceEstimate(String pearlType, String tier, String range, String basis, String note) {
+        Map<String, Object> item = new LinkedHashMap<String, Object>();
+        item.put("currency", "CNY");
+        item.put("unit", "元/颗");
+        item.put("sizeReference", "9-10mm");
+        item.put("pearlType", safeString(pearlType, "珍珠"));
+        item.put("tier", tier);
+        item.put("range", range);
+        item.put("basis", basis);
+        item.put("note", note);
+        return item;
+    }
+
+    private String inferPriceTier(String grade, String luster) {
+        String text = safeString(luster, "");
+        if ("A".equals(grade) || text.contains("极强")) {
+            return "收藏";
+        }
+        if ("B".equals(grade) || text.contains("强光")) {
+            return "精选";
+        }
+        return "入门";
+    }
+
+    private String lookupPriceRange(String pearlType, String tier) {
+        String type = safeString(pearlType, "淡水珍珠");
+        if (type.contains("爱迪生")) return pickTierRange(tier, "200-500", "500-1,500", "1,500-4,000");
+        if (type.contains("澳白") || type.contains("南洋白")) return pickTierRange(tier, "3,000-8,000", "8,000-20,000", "20,000-50,000");
+        if (type.contains("金珠")) return pickTierRange(tier, "2,000-6,000", "6,000-15,000", "15,000-40,000");
+        if (type.contains("大溪地") || type.contains("黑珍珠")) return pickTierRange(tier, "1,500-5,000", "5,000-12,000", "12,000-30,000");
+        if (type.contains("Akoya") || type.contains("日本")) return pickTierRange(tier, "1,000-3,000", "3,000-8,000", "8,000-20,000");
+        if (type.contains("马贝")) return pickTierRange(tier, "500-1,500", "1,500-4,000", "4,000-10,000");
+        return pickTierRange(tier, "100-300", "300-800", "800-2,000");
+    }
+
+    private String pickTierRange(String tier, String entry, String selected, String collectible) {
+        if ("收藏".equals(tier)) return collectible;
+        if ("精选".equals(tier)) return selected;
+        return entry;
     }
 
     private Map<String, Object> buildQualityGrade(Map<String, Object> raw, int confidence) {
@@ -696,8 +774,10 @@ public class ArkVisionService {
                 "即使珍珠图片不够完美，也必须基于可见信息给出估算值。不要输出“待复核”“无法判断”“不确定”等状态，可用较低 confidence 表达不确定性。",
                 "authenticity 只能从：真、假、非珍珠 中选择。非珍珠只用于图片未检测到珍珠主体的场景。",
                 buildPearlKnowledgeBase(),
-                "真珍珠类型只能从：淡水珍珠、海水珍珠、澳白、Akoya、南洋白珠、南洋金珠、大溪地黑珍珠 中选择。",
+                buildPearlPriceKnowledgeBase(),
+                "真珍珠类型只能从：淡水珍珠、爱迪生、海水珍珠、澳白、Akoya、南洋白珠、南洋金珠、南洋大溪地、大溪地黑珍珠、马贝 中选择。",
                 "假珠类型只能从：塑料仿珠、玻璃仿珠、贝珠、施家珍珠、染色/覆膜珠 中选择。",
+                "只有 authenticity=真 且 pearlDetected=true 时才输出价格估算 priceEstimate；authenticity=假 或 非珍珠时 priceEstimate 必须为 null。",
                 "亮度只能从：极强光、强光（高光）、中光、弱光 中选择。",
                 "圆度只能从：正圆、近正圆、近圆、椭圆、扁圆、水滴、异形（巴洛克） 中选择。",
                 "瑕疵等级只能从：A 无瑕、B 微瑕、C 小瑕、D 瑕疵、E 重瑕 中选择。",
@@ -708,9 +788,10 @@ public class ArkVisionService {
                 "  \"pearlDetected\": true/false,",
                 "  \"result\": \"淡水珍珠/Akoya/塑料仿珠/未检测到珍珠\",",
                 "  \"authenticity\": \"真/假/非珍珠\",",
-                "  \"pearlType\": \"淡水珍珠/海水珍珠/澳白/Akoya/南洋白珠/南洋金珠/大溪地黑珍珠\",",
+                "  \"pearlType\": \"淡水珍珠/爱迪生/海水珍珠/澳白/Akoya/南洋白珠/南洋金珠/南洋大溪地/大溪地黑珍珠/马贝\",",
                 "  \"imitationType\": \"塑料仿珠/玻璃仿珠/贝珠/施家珍珠/染色/覆膜珠/空字符串\",",
                 "  \"confidence\": 1-99,",
+                "  \"priceEstimate\": {\"currency\":\"CNY\", \"unit\":\"元/颗\", \"sizeReference\":\"9-10mm\", \"tier\":\"入门/精选/收藏\", \"range\":\"如 300-800\", \"basis\":\"按参考表和图片等级估算\", \"note\":\"仅供图片初筛参考\"} 或 null,",
                 "  \"qualityGrade\": {\"grade\":\"A/B/C/D/E\", \"name\":\"无瑕/微瑕/小瑕/瑕疵/重瑕\", \"score\":1-100, \"description\":\"按定级标准描述\"},",
                 "  \"typeScore\": 1-100,",
                 "  \"luster\": {\"level\":\"极强光/强光（高光）/中光/弱光\", \"score\":1-100, \"description\":\"判断依据\"},",
@@ -721,6 +802,22 @@ public class ArkVisionService {
                 "  \"reasons\": [\"依据1：必须引用纹理/孔口/光泽/颜色/轮廓中的一个\", \"依据2：必须引用另一视觉维度\", \"依据3：说明不确定性或反向证据\"],",
                 "  \"suggestions\": [\"建议1\", \"建议2\"]",
                 "}"
+        );
+    }
+
+    private String buildPearlPriceKnowledgeBase() {
+        return String.join("\n",
+                "9-10mm 珍珠价格参考区间，单位为人民币元/颗，仅用于真珍珠图片初筛粗估：",
+                "价格等级定义：入门=光泽中、可见瑕疵；精选=光泽强、微瑕；收藏=光泽极强、几乎无瑕。",
+                "- 淡水珍珠（无核）：入门 100-300；精选 300-800；收藏 800-2,000。",
+                "- 爱迪生（有核）：入门 200-500；精选 500-1,500；收藏 1,500-4,000。",
+                "- 南洋澳白/南洋白珠：入门 3,000-8,000；精选 8,000-20,000；收藏 20,000-50,000。",
+                "- 南洋金珠：入门 2,000-6,000；精选 6,000-15,000；收藏 15,000-40,000。",
+                "- 南洋大溪地/大溪地黑珍珠：入门 1,500-5,000；精选 5,000-12,000；收藏 12,000-30,000。",
+                "- 日本Akoya/Akoya：入门 1,000-3,000；精选 3,000-8,000；收藏 8,000-20,000。",
+                "- 马贝：入门 500-1,500；精选 1,500-4,000；收藏 4,000-10,000。",
+                "价格估算规则：根据识别出的珍珠类型、亮度和瑕疵等级选择入门/精选/收藏。若尺寸无法从图片可靠判断，也按 9-10mm 单颗参考价输出，并在 note 中说明。",
+                "假珍珠、非珍珠图片、无法确认珍珠主体时，不要输出价值估算，priceEstimate 必须为 null。"
         );
     }
 
