@@ -374,7 +374,7 @@ public class ArkVisionService {
             report.setPearlType(safeString(raw.get("pearlType"), "淡水珍珠"));
             report.setImitationType(safeString(raw.get("imitationType"), ""));
             report.setConfidence(clamp(toInt(raw.get("confidence"), 72), 1, 99));
-            report.setResult(safeString(raw.get("result"), buildResult(report)));
+            report.setResult(cleanResultPrefix(safeString(raw.get("result"), buildResult(report))));
             report.setQualityGrade(buildQualityGrade(raw, report.getConfidence()));
             report.setAttributes(buildAttributes(raw, report.getAuthenticity()));
             report.setSummary(safeString(raw.get("summary"), "已完成图片初筛，并根据当前照片给出估算结果。"));
@@ -515,12 +515,19 @@ public class ArkVisionService {
 
     private String buildResult(PearlReport report) {
         if ("假".equals(report.getAuthenticity()) && StringUtils.hasText(report.getImitationType())) {
-            return "疑似" + report.getImitationType();
+            return report.getImitationType();
         }
         if ("非珍珠".equals(report.getAuthenticity())) {
             return "未检测到珍珠";
         }
-        return "疑似" + safeString(report.getPearlType(), "淡水珍珠");
+        return safeString(report.getPearlType(), "淡水珍珠");
+    }
+
+    private String cleanResultPrefix(String value) {
+        if (!StringUtils.hasText(value)) {
+            return value;
+        }
+        return value.replace("疑似", "").trim();
     }
 
     private Map<String, Object> buildQualityGrade(Map<String, Object> raw, int confidence) {
@@ -699,7 +706,7 @@ public class ArkVisionService {
                 "JSON 字段：",
                 "{",
                 "  \"pearlDetected\": true/false,",
-                "  \"result\": \"疑似淡水珍珠/疑似Akoya/疑似塑料仿珠/未检测到珍珠\",",
+                "  \"result\": \"淡水珍珠/Akoya/塑料仿珠/未检测到珍珠\",",
                 "  \"authenticity\": \"真/假/非珍珠\",",
                 "  \"pearlType\": \"淡水珍珠/海水珍珠/澳白/Akoya/南洋白珠/南洋金珠/大溪地黑珍珠\",",
                 "  \"imitationType\": \"塑料仿珠/玻璃仿珠/贝珠/施家珍珠/染色/覆膜珠/空字符串\",",
