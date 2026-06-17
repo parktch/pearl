@@ -35,6 +35,7 @@ import java.util.Map;
 public class ArkVisionService {
 
     private static final Map<String, GradeInfo> GRADE_INFO = new HashMap<String, GradeInfo>();
+    private static final Map<String, GradeInfo> QUALITY_GRADE_INFO = new LinkedHashMap<String, GradeInfo>();
 
     static {
         GRADE_INFO.put("A", new GradeInfo("无瑕", "肉眼观察极难见瑕疵"));
@@ -42,6 +43,15 @@ public class ArkVisionService {
         GRADE_INFO.put("C", new GradeInfo("小瑕", "较小瑕疵，肉眼易见"));
         GRADE_INFO.put("D", new GradeInfo("瑕疵", "明显瑕疵，占表面积 1/4 以下"));
         GRADE_INFO.put("E", new GradeInfo("重瑕", "严重瑕疵，占表面积 1/4 以上"));
+        QUALITY_GRADE_INFO.put("A+", new GradeInfo("收藏·极品", "顶级收藏，市场稀缺"));
+        QUALITY_GRADE_INFO.put("A", new GradeInfo("收藏·优级", "优秀收藏品质"));
+        QUALITY_GRADE_INFO.put("A-", new GradeInfo("收藏·入门", "收藏入门或高精选顶配"));
+        QUALITY_GRADE_INFO.put("B+", new GradeInfo("精选·顶级", "精选顶级"));
+        QUALITY_GRADE_INFO.put("B", new GradeInfo("精选·中档", "精选中档主力"));
+        QUALITY_GRADE_INFO.put("B-", new GradeInfo("精选·入门", "精选入门或高入门顶配"));
+        QUALITY_GRADE_INFO.put("C+", new GradeInfo("入门·高配", "入门高配"));
+        QUALITY_GRADE_INFO.put("C", new GradeInfo("入门·标准", "入门标准"));
+        QUALITY_GRADE_INFO.put("C-", new GradeInfo("入门·基础", "入门基础"));
     }
 
     private final ArkProperties arkProperties;
@@ -395,7 +405,7 @@ public class ArkVisionService {
             fallback.setConfidence(68);
             fallback.setResult("图片初筛已完成");
             fallback.setPriceEstimate(defaultPriceEstimate("淡水珍珠", "入门", "100-300"));
-            fallback.setQualityGrade(buildGrade("C", 68));
+            fallback.setQualityGrade(buildQualityGradeItem("B", 68));
             fallback.setAttributes(defaultAttributes());
             fallback.setSummary("模型返回内容未能解析为结构化 JSON，已按当前图片给出保守估算。");
             fallback.setReasons(Arrays.asList("模型返回格式不稳定，服务端已做兜底处理。"));
@@ -611,9 +621,14 @@ public class ArkVisionService {
     private Map<String, Object> buildQualityGrade(Map<String, Object> raw, int confidence) {
         Map<String, Object> qualityGrade = toMap(raw.get("qualityGrade"));
         Map<String, Object> blemish = toMap(raw.get("blemish"));
-        String grade = normalizeGrade(firstText(qualityGrade.get("grade"), qualityGrade.get("name"), blemish.get("grade")));
-        int score = clamp(toInt(firstValue(qualityGrade.get("score"), blemish.get("score")), confidence), 1, 100);
-        return buildGrade(grade, score);
+        Map<String, Object> luster = toMap(raw.get("luster"));
+        Map<String, Object> roundness = toMap(raw.get("roundness"));
+        Map<String, Object> color = toMap(raw.get("color"));
+        String modelGrade = normalizeQualityGrade(firstText(qualityGrade.get("grade"), qualityGrade.get("level"), qualityGrade.get("name")));
+        int score = clamp(toInt(qualityGrade.get("score"), calculateQualityScore(luster, blemish, roundness, color)), 1, 100);
+        String grade = StringUtils.hasText(modelGrade) ? modelGrade : mapScoreToQualityGrade(score);
+        grade = applyQualityVetoRules(grade, luster, blemish, roundness, color);
+        return buildQualityGradeItem(grade, score);
     }
 
     private Map<String, Object> buildGrade(String grade, int score) {
@@ -624,6 +639,21 @@ public class ArkVisionService {
         item.put("score", score);
         item.put("description", info.description);
         item.put("label", grade + " " + info.level);
+        return item;
+    }
+
+    private Map<String, Object> buildQualityGradeItem(String grade, int score) {
+        String normalized = normalizeQualityGrade(grade);
+        if (!StringUtils.hasText(normalized)) {
+            normalized = mapScoreToQualityGrade(score);
+        }
+        GradeInfo info = QUALITY_GRADE_INFO.containsKey(normalized) ? QUALITY_GRADE_INFO.get(normalized) : QUALITY_GRADE_INFO.get("B");
+        Map<String, Object> item = new LinkedHashMap<String, Object>();
+        item.put("grade", normalized);
+        item.put("level", info.level);
+        item.put("score", clamp(score, 1, 100));
+        item.put("description", info.description);
+        item.put("label", normalized + " " + info.level);
         return item;
     }
 
@@ -670,6 +700,130 @@ public class ArkVisionService {
         return grade + " " + safeString(blemish.get("level"), info.level);
     }
 
+    private int calculateQualityScore(Map<String, Object> luster, Map<String, Object> blemish, Map<String, Object> roundness, Map<String, Object> color) {
+        double score = lusterScore(luster) * 0.35
+                + blemishScore(blemish) * 0.30
+                + roundnessScore(roundness) * 0.20
+                + colorScore(color) * 0.15;
+        return clamp((int) Math.round(score), 1, 100);
+    }
+
+    private int lusterScore(Map<String, Object> luster) {
+        String level = safeString(luster.get("level"), "");
+        if (level.contains("极强")) return 100;
+        if (level.contains("强光") || level.contains("高光")) return 75;
+        if (level.contains("弱")) return 25;
+        return 50;
+    }
+
+    private int blemishScore(Map<String, Object> blemish) {
+        String grade = normalizeGrade(firstText(blemish.get("grade"), blemish.get("level")));
+        if ("A".equals(grade)) return 100;
+        if ("B".equals(grade)) return 80;
+        if ("C".equals(grade)) return 60;
+        if ("D".equals(grade)) return 30;
+        return 10;
+    }
+
+    private int roundnessScore(Map<String, Object> roundness) {
+        String level = safeString(roundness.get("level"), "");
+        if (level.contains("正圆") && !level.contains("近正圆")) return 100;
+        if (level.contains("近正圆")) return 85;
+        if (level.contains("近圆")) return 65;
+        if (level.contains("椭圆")) return 45;
+        if (level.contains("扁圆")) return 30;
+        if (level.contains("水滴")) return 20;
+        if (level.contains("异形") || level.contains("巴洛克")) return 10;
+        return 65;
+    }
+
+    private int colorScore(Map<String, Object> color) {
+        int explicit = toInt(color.get("score"), 0);
+        if (explicit > 0) {
+            if (explicit >= 85) return 100;
+            if (explicit >= 55) return 70;
+            return 40;
+        }
+        String text = safeString(firstValue(color.get("quality"), color.get("name"), color.get("representative"), color.get("description")), "");
+        if (text.contains("优质") || text.contains("冷光") || text.contains("银白") || text.contains("孔雀")
+                || text.contains("浓玫瑰") || text.contains("真多麻") || text.contains("浓茶金")
+                || text.contains("橙金") || text.contains("高饱和")) {
+            return 100;
+        }
+        if (text.contains("偏色") || text.contains("暗") || text.contains("灰") || text.contains("杂")
+                || text.contains("低饱和") || text.contains("褐黄")) {
+            return 40;
+        }
+        return 70;
+    }
+
+    private String mapScoreToQualityGrade(int score) {
+        if (score >= 93) return "A+";
+        if (score >= 85) return "A";
+        if (score >= 78) return "A-";
+        if (score >= 70) return "B+";
+        if (score >= 62) return "B";
+        if (score >= 54) return "B-";
+        if (score >= 42) return "C+";
+        if (score >= 30) return "C";
+        return "C-";
+    }
+
+    private String applyQualityVetoRules(String grade, Map<String, Object> luster, Map<String, Object> blemish, Map<String, Object> roundness, Map<String, Object> color) {
+        String result = normalizeQualityGrade(grade);
+        if (!StringUtils.hasText(result)) {
+            result = "B";
+        }
+        String blemishGrade = normalizeGrade(firstText(blemish.get("grade"), blemish.get("level")));
+        if ("E".equals(blemishGrade)) {
+            result = worseQualityGrade(result, "C");
+        } else if ("D".equals(blemishGrade)) {
+            result = worseQualityGrade(result, "C+");
+        }
+        String lusterLevel = safeString(luster.get("level"), "");
+        if (lusterLevel.contains("弱")) {
+            result = worseQualityGrade(result, "B-");
+        } else if (lusterLevel.contains("中")) {
+            result = worseQualityGrade(result, "A-");
+        }
+        String roundnessLevel = safeString(roundness.get("level"), "");
+        if (roundnessLevel.contains("椭圆") || roundnessLevel.contains("扁圆") || roundnessLevel.contains("水滴")
+                || roundnessLevel.contains("异形") || roundnessLevel.contains("巴洛克")) {
+            result = worseQualityGrade(result, "B-");
+        }
+        if (colorScore(color) <= 40) {
+            result = degradeQualityGrade(result);
+        }
+        return result;
+    }
+
+    private String worseQualityGrade(String grade, String cap) {
+        int gradeRank = qualityGradeRank(grade);
+        int capRank = qualityGradeRank(cap);
+        return gradeRank < capRank ? cap : grade;
+    }
+
+    private String degradeQualityGrade(String grade) {
+        String[] order = qualityGradeOrder();
+        int rank = qualityGradeRank(grade);
+        return order[Math.min(order.length - 1, rank + 1)];
+    }
+
+    private int qualityGradeRank(String grade) {
+        String normalized = normalizeQualityGrade(grade);
+        String[] order = qualityGradeOrder();
+        for (int index = 0; index < order.length; index += 1) {
+            if (order[index].equals(normalized)) {
+                return index;
+            }
+        }
+        return 4;
+    }
+
+    private String[] qualityGradeOrder() {
+        return new String[]{"A+", "A", "A-", "B+", "B", "B-", "C+", "C", "C-"};
+    }
+
     private String formatColor(Map<String, Object> color) {
         String series = safeString(color.get("series"), "");
         String name = safeString(color.get("name"), "");
@@ -693,6 +847,27 @@ public class ArkVisionService {
             }
         }
         return "C";
+    }
+
+    private String normalizeQualityGrade(String value) {
+        String text = value == null ? "" : value.trim().toUpperCase();
+        String cleaned = text.replace(" ", "");
+        String[] matchOrder = new String[]{"A+", "A-", "B+", "B-", "C+", "C-", "A", "B", "C"};
+        for (String grade : matchOrder) {
+            if (cleaned.startsWith(grade)) {
+                return grade;
+            }
+        }
+        if (text.contains("极品")) return "A+";
+        if (text.contains("收藏") && text.contains("优")) return "A";
+        if (text.contains("收藏")) return "A-";
+        if (text.contains("精选") && text.contains("顶")) return "B+";
+        if (text.contains("精选") && text.contains("入门")) return "B-";
+        if (text.contains("精选")) return "B";
+        if (text.contains("入门") && text.contains("高")) return "C+";
+        if (text.contains("入门") && text.contains("基础")) return "C-";
+        if (text.contains("入门")) return "C";
+        return "";
     }
 
     private List<String> toStringList(Object value) {
@@ -719,7 +894,19 @@ public class ArkVisionService {
     }
 
     private Object firstValue(Object first, Object second) {
-        return first != null ? first : second;
+        return firstValue(new Object[]{first, second});
+    }
+
+    private Object firstValue(Object... values) {
+        if (values == null) {
+            return null;
+        }
+        for (Object value : values) {
+            if (value != null) {
+                return value;
+            }
+        }
+        return null;
     }
 
     private String firstText(Object first, Object second) {
@@ -783,6 +970,7 @@ public class ArkVisionService {
                 "瑕疵等级只能从：A 无瑕、B 微瑕、C 小瑕、D 瑕疵、E 重瑕 中选择。",
                 "瑕疵描述参考：A 肉眼观察极难见瑕疵；B 极少针点状瑕疵，肉眼较难发现；C 较小瑕疵，肉眼易见；D 明显瑕疵，占表面积1/4以下；E 严重瑕疵，占表面积1/4以上。",
                 "颜色系列参考：白色系（纯白、奶白、银白、瓷白）；黑色系（黑、灰黑、蓝黑、褐黑）；红色/粉色系（粉红、浅玫瑰红、浅紫红）；黄色/金色系（浅黄、米黄、金黄、橙黄）；其他色系（紫、青、蓝、绿、古铜色等）。",
+                buildPearlGradingSystem(),
                 "JSON 字段：",
                 "{",
                 "  \"pearlDetected\": true/false,",
@@ -792,7 +980,7 @@ public class ArkVisionService {
                 "  \"imitationType\": \"塑料仿珠/玻璃仿珠/贝珠/施家珍珠/染色/覆膜珠/空字符串\",",
                 "  \"confidence\": 1-99,",
                 "  \"priceEstimate\": {\"currency\":\"CNY\", \"unit\":\"元/颗\", \"sizeReference\":\"估算规格如 9-10mm，尺寸不明则写 9-10mm 默认参考\", \"tier\":\"入门/精选/收藏\", \"range\":\"如 300 或 250-400\", \"basis\":\"按山下湖多品种多规格参考表和图片等级估算\", \"note\":\"仅供图片初筛参考\"} 或 null,",
-                "  \"qualityGrade\": {\"grade\":\"A/B/C/D/E\", \"name\":\"无瑕/微瑕/小瑕/瑕疵/重瑕\", \"score\":1-100, \"description\":\"按定级标准描述\"},",
+                "  \"qualityGrade\": {\"grade\":\"A+/A/A-/B+/B/B-/C+/C/C-\", \"name\":\"收藏·极品/收藏·优级/收藏·入门/精选·顶级/精选·中档/精选·入门/入门·高配/入门·标准/入门·基础\", \"score\":1-100, \"description\":\"按9级总评标准描述\"},",
                 "  \"typeScore\": 1-100,",
                 "  \"luster\": {\"level\":\"极强光/强光（高光）/中光/弱光\", \"score\":1-100, \"description\":\"判断依据\"},",
                 "  \"roundness\": {\"level\":\"正圆/近正圆/近圆/椭圆/扁圆/水滴/异形（巴洛克）\", \"score\":1-100, \"description\":\"判断依据\"},",
@@ -802,6 +990,20 @@ public class ArkVisionService {
                 "  \"reasons\": [\"依据1：必须引用纹理/孔口/光泽/颜色/轮廓中的一个\", \"依据2：必须引用另一视觉维度\", \"依据3：说明不确定性或反向证据\"],",
                 "  \"suggestions\": [\"建议1\", \"建议2\"]",
                 "}"
+        );
+    }
+
+    private String buildPearlGradingSystem() {
+        return String.join("\n",
+                "珍珠品质9级分级量化标准 v2.0：",
+                "总评得分 = 光泽分×35% + 瑕疵分×30% + 圆度分×20% + 颜色分×15%。",
+                "光泽分：极强光=100，强光（高光）=75，中光=50，弱光=25。",
+                "瑕疵分：A无瑕=100，B微瑕=80，C小瑕=60，D瑕疵=30，E重瑕=10。",
+                "圆度分：正圆=100，近正圆=85，近圆=65，椭圆=45，扁圆=30，水滴=20，异形（巴洛克）=10。",
+                "颜色分：先判色系，再判色质；优质色=100，正色=70，偏色=40。白色系优质色参考冷光蓝调/银白，正色参考纯白/奶白，偏色参考黄白/灰白；黑色系优质色参考孔雀绿/蓝黑；红粉色系优质色参考浓玫瑰红/真多麻；黄/金色系优质色参考浓茶金/橙金；其他色系优质色参考稀有高饱和色。",
+                "9级映射：93-100=A+ 收藏·极品；85-92=A 收藏·优级；78-84=A- 收藏·入门；70-77=B+ 精选·顶级；62-69=B 精选·中档；54-61=B- 精选·入门；42-53=C+ 入门·高配；30-41=C 入门·标准；0-29=C- 入门·基础。",
+                "否决规则优先级：瑕疵否决 > 光泽否决 > 圆度否决 > 颜色降级。瑕疵D封顶C+；瑕疵E封顶C；弱光封顶B-；中光封顶A-；圆度为椭圆/扁圆/水滴/异形时封顶B-；颜色为偏色时最终等级降1档。",
+                "qualityGrade 必须输出整体品质9级，不要把瑕疵 A-E 直接当作整体品质等级；瑕疵 A-E 只放在 blemish 字段。"
         );
     }
 
@@ -819,6 +1021,7 @@ public class ArkVisionService {
                 "价格估算规则：先识别珍珠类型，再尽量根据图片中的相对尺寸、用户上传角度或可见参照估算规格；若无法可靠判断尺寸，默认按 9-10mm 单颗参考价输出，并在 sizeReference 或 note 中说明“默认参考”。",
                 "输出 priceEstimate.range 时可以给单点参考价（如 300）或保守区间（如 250-400）；若图片质量不足、尺寸不明或类型不稳，应扩大为保守区间并降低 confidence。",
                 "价格估算规则：根据亮度和瑕疵等级选择入门/精选/收藏；A或极强光优先收藏，B或强光优先精选，C/D/E或中弱光优先入门。",
+                "价格系数规则：A+ 使用收藏价×1.00，A 使用收藏价×0.80，A- 使用收藏价×0.60；B+ 使用精选价×1.00，B 使用精选价×0.80，B- 使用精选价×0.60；C+ 使用入门价×1.00，C 使用入门价×0.80，C- 使用入门价×0.60。",
                 "假珍珠、非珍珠图片、无法确认珍珠主体时，不要输出价值估算，priceEstimate 必须为 null。"
         );
     }
