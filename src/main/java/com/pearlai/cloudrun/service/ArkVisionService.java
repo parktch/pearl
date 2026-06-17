@@ -555,7 +555,7 @@ public class ArkVisionService {
             tier = "参考";
         }
         if (!StringUtils.hasText(basis)) {
-            basis = "按 9-10mm 单颗珍珠参考表，结合图片估算等级给出";
+            basis = "按山下湖多品种、多规格单颗珍珠市场参考价，结合图片估算等级给出";
         }
         if (!StringUtils.hasText(note)) {
             note = "仅为图片初筛粗估价格带，不作为交易定价或回收报价";
@@ -564,14 +564,14 @@ public class ArkVisionService {
     }
 
     private Map<String, Object> defaultPriceEstimate(String pearlType, String tier, String range) {
-        return defaultPriceEstimate(pearlType, tier, range, "按 9-10mm 单颗珍珠参考表估算", "仅为图片初筛粗估价格带，不作为交易定价或回收报价");
+        return defaultPriceEstimate(pearlType, tier, range, "按山下湖多品种、多规格单颗珍珠市场参考价估算", "仅为图片初筛粗估价格带，不作为交易定价或回收报价");
     }
 
     private Map<String, Object> defaultPriceEstimate(String pearlType, String tier, String range, String basis, String note) {
         Map<String, Object> item = new LinkedHashMap<String, Object>();
         item.put("currency", "CNY");
         item.put("unit", "元/颗");
-        item.put("sizeReference", "9-10mm");
+        item.put("sizeReference", "9-10mm 默认参考");
         item.put("pearlType", safeString(pearlType, "珍珠"));
         item.put("tier", tier);
         item.put("range", range);
@@ -593,13 +593,13 @@ public class ArkVisionService {
 
     private String lookupPriceRange(String pearlType, String tier) {
         String type = safeString(pearlType, "淡水珍珠");
-        if (type.contains("爱迪生")) return pickTierRange(tier, "200-500", "500-1,500", "1,500-4,000");
-        if (type.contains("澳白") || type.contains("南洋白")) return pickTierRange(tier, "3,000-8,000", "8,000-20,000", "20,000-50,000");
-        if (type.contains("金珠")) return pickTierRange(tier, "2,000-6,000", "6,000-15,000", "15,000-40,000");
-        if (type.contains("大溪地") || type.contains("黑珍珠")) return pickTierRange(tier, "1,500-5,000", "5,000-12,000", "12,000-30,000");
-        if (type.contains("Akoya") || type.contains("日本")) return pickTierRange(tier, "1,000-3,000", "3,000-8,000", "8,000-20,000");
-        if (type.contains("马贝")) return pickTierRange(tier, "500-1,500", "1,500-4,000", "4,000-10,000");
-        return pickTierRange(tier, "100-300", "300-800", "800-2,000");
+        if (type.contains("爱迪生")) return pickTierRange(tier, "50", "150", "400");
+        if (type.contains("澳白") || type.contains("南洋白")) return pickTierRange(tier, "800", "2,500", "7,000");
+        if (type.contains("金珠")) return pickTierRange(tier, "600", "2,000", "6,000");
+        if (type.contains("大溪地") || type.contains("黑珍珠")) return pickTierRange(tier, "500", "1,800", "5,000");
+        if (type.contains("Akoya") || type.contains("日本")) return pickTierRange(tier, "1,200", "4,000", "10,000");
+        if (type.contains("马贝")) return pickTierRange(tier, "350", "1,000", "2,500");
+        return pickTierRange(tier, "120", "300", "600");
     }
 
     private String pickTierRange(String tier, String entry, String selected, String collectible) {
@@ -791,7 +791,7 @@ public class ArkVisionService {
                 "  \"pearlType\": \"淡水珍珠/爱迪生/海水珍珠/澳白/Akoya/南洋白珠/南洋金珠/南洋大溪地/大溪地黑珍珠/马贝\",",
                 "  \"imitationType\": \"塑料仿珠/玻璃仿珠/贝珠/施家珍珠/染色/覆膜珠/空字符串\",",
                 "  \"confidence\": 1-99,",
-                "  \"priceEstimate\": {\"currency\":\"CNY\", \"unit\":\"元/颗\", \"sizeReference\":\"9-10mm\", \"tier\":\"入门/精选/收藏\", \"range\":\"如 300-800\", \"basis\":\"按参考表和图片等级估算\", \"note\":\"仅供图片初筛参考\"} 或 null,",
+                "  \"priceEstimate\": {\"currency\":\"CNY\", \"unit\":\"元/颗\", \"sizeReference\":\"估算规格如 9-10mm，尺寸不明则写 9-10mm 默认参考\", \"tier\":\"入门/精选/收藏\", \"range\":\"如 300 或 250-400\", \"basis\":\"按山下湖多品种多规格参考表和图片等级估算\", \"note\":\"仅供图片初筛参考\"} 或 null,",
                 "  \"qualityGrade\": {\"grade\":\"A/B/C/D/E\", \"name\":\"无瑕/微瑕/小瑕/瑕疵/重瑕\", \"score\":1-100, \"description\":\"按定级标准描述\"},",
                 "  \"typeScore\": 1-100,",
                 "  \"luster\": {\"level\":\"极强光/强光（高光）/中光/弱光\", \"score\":1-100, \"description\":\"判断依据\"},",
@@ -807,16 +807,18 @@ public class ArkVisionService {
 
     private String buildPearlPriceKnowledgeBase() {
         return String.join("\n",
-                "9-10mm 珍珠价格参考区间，单位为人民币元/颗，仅用于真珍珠图片初筛粗估：",
+                "山下湖珍珠明细市场参考价，单位为人民币元/颗，仅用于真珍珠图片初筛粗估。",
                 "价格等级定义：入门=光泽中、可见瑕疵；精选=光泽强、微瑕；收藏=光泽极强、几乎无瑕。",
-                "- 淡水珍珠（无核）：入门 100-300；精选 300-800；收藏 800-2,000。",
-                "- 爱迪生（有核）：入门 200-500；精选 500-1,500；收藏 1,500-4,000。",
-                "- 南洋澳白/南洋白珠：入门 3,000-8,000；精选 8,000-20,000；收藏 20,000-50,000。",
-                "- 南洋金珠：入门 2,000-6,000；精选 6,000-15,000；收藏 15,000-40,000。",
-                "- 南洋大溪地/大溪地黑珍珠：入门 1,500-5,000；精选 5,000-12,000；收藏 12,000-30,000。",
-                "- 日本Akoya/Akoya：入门 1,000-3,000；精选 3,000-8,000；收藏 8,000-20,000。",
-                "- 马贝：入门 500-1,500；精选 1,500-4,000；收藏 4,000-10,000。",
-                "价格估算规则：根据识别出的珍珠类型、亮度和瑕疵等级选择入门/精选/收藏。若尺寸无法从图片可靠判断，也按 9-10mm 单颗参考价输出，并在 note 中说明。",
+                "淡水珍珠（无核/有核，6mm以上主要参考无核）：2-3mm 入门5/精选15/收藏30；3-4mm 10/25/50；4-5mm 15/40/80；5-6mm 25/60/120；6-7mm 40/100/200；7-8mm 60/150/300；8-9mm 80/200/400；9-10mm 120/300/600；10-11mm 200/500/1000。注：淡水无核珍珠正圆率极低，9mm以上正圆收藏级稀缺。",
+                "爱迪生（有核淡水）：8-9mm 30/80/200；9-10mm 50/150/400；10-11mm 80/250/600；11-12mm 150/400/1000；12-13mm 300/800/2000；13-14mm 600/1500/4000；14-15mm 1000/2500/8000。注：圆度优于无核淡水，大颗粒性价比突出。",
+                "南洋澳白/南洋白珠（海水）：8-9mm 500/1500/4000；9-10mm 800/2500/7000；10-11mm 1500/4000/12000；11-12mm 3000/7000/20000；12-13mm 5000/12000/35000；13-14mm 8000/20000/60000；14-15mm 15000/35000/100000；15-16mm 30000/60000/200000。注：银白冷光为贵，13mm以上大珠稀缺。",
+                "南洋金珠（海水）：8-9mm 400/1200/3500；9-10mm 600/2000/6000；10-11mm 1200/3500/10000；11-12mm 2500/6000/18000；12-13mm 4000/10000/30000；13-14mm 7000/18000/50000；14-15mm 12000/30000/90000。注：浓金为贵，浅色金价格偏低。",
+                "南洋大溪地/大溪地黑珍珠（海水）：8-9mm 300/1000/3000；9-10mm 500/1800/5000；10-11mm 1000/3000/9000；11-12mm 2000/5500/16000；12-13mm 3500/9000/28000；13-14mm 6000/15000/45000；14-15mm 10000/25000/80000。注：孔雀绿伴彩为贵，纯黑无伴彩价格相对低。",
+                "日本Akoya/Akoya（海水）：2-3mm 10/30/80；3-4mm 20/60/150；4-5mm 40/120/300；5-6mm 80/250/600；6-7mm 150/500/1200；7-8mm 300/1000/2500；8-9mm 600/2000/5000；9-10mm 1200/4000/10000。注：粉青光伴彩为贵，9-10mm 已属大尺寸。",
+                "马贝（海水/半圆）：13-14mm 200/600/1500；14-15mm 350/1000/2500；15-16mm 600/1800/4500；16-17mm 1000/3000/8000；17-18mm 1800/5000/15000。注：以饱满度、彩虹光泽和表面无瑕度为评判标准。",
+                "价格估算规则：先识别珍珠类型，再尽量根据图片中的相对尺寸、用户上传角度或可见参照估算规格；若无法可靠判断尺寸，默认按 9-10mm 单颗参考价输出，并在 sizeReference 或 note 中说明“默认参考”。",
+                "输出 priceEstimate.range 时可以给单点参考价（如 300）或保守区间（如 250-400）；若图片质量不足、尺寸不明或类型不稳，应扩大为保守区间并降低 confidence。",
+                "价格估算规则：根据亮度和瑕疵等级选择入门/精选/收藏；A或极强光优先收藏，B或强光优先精选，C/D/E或中弱光优先入门。",
                 "假珍珠、非珍珠图片、无法确认珍珠主体时，不要输出价值估算，priceEstimate 必须为 null。"
         );
     }
