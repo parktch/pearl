@@ -7,6 +7,7 @@ public class PearlAnalyzeRequest {
 
     private String mode;
     private List<ImageInput> images = new ArrayList<>();
+    private PearlAnalyzeContext context = new PearlAnalyzeContext();
 
     public String getMode() {
         return mode;
@@ -22,5 +23,13 @@ public class PearlAnalyzeRequest {
 
     public void setImages(List<ImageInput> images) {
         this.images = images;
+    }
+
+    public PearlAnalyzeContext getContext() {
+        return context;
+    }
+
+    public void setContext(PearlAnalyzeContext context) {
+        this.context = context;
     }
 }

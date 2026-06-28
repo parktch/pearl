@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.pearlai.cloudrun.config.ArkProperties;
 import com.pearlai.cloudrun.dto.ImageInput;
+import com.pearlai.cloudrun.dto.PearlAnalyzeContext;
 import com.pearlai.cloudrun.dto.PearlAnalyzeRequest;
 import com.pearlai.cloudrun.dto.PearlReport;
 import org.springframework.http.HttpEntity;
@@ -86,7 +87,7 @@ public class ArkVisionService {
                     Map.class
             );
             String content = extractContent(response.getBody());
-            return normalizeReport(content);
+            return normalizeReport(content, request);
         } catch (HttpStatusCodeException error) {
             throw new IllegalStateException("Ark API error " + error.getStatusCode().value() + ": " + error.getResponseBodyAsString(), error);
         }
@@ -178,7 +179,7 @@ public class ArkVisionService {
             }
 
             String finalText = StringUtils.hasText(answerText.toString()) ? answerText.toString() : reasoningText.toString();
-            PearlReport report = normalizeReport(finalText);
+            PearlReport report = normalizeReport(finalText, request);
             if (listener != null) {
                 listener.onReport(report);
             }
@@ -218,7 +219,7 @@ public class ArkVisionService {
 
         Map<String, Object> text = new LinkedHashMap<String, Object>();
         text.put("type", "text");
-        text.put("text", buildPrompt(request.getMode()));
+        text.put("text", buildPrompt(request.getMode(), request.getContext()));
         content.add(text);
 
         Map<String, Object> message = new LinkedHashMap<String, Object>();
@@ -369,7 +370,7 @@ public class ArkVisionService {
         return String.valueOf(contentValue);
     }
 
-    private PearlReport normalizeReport(String content) {
+    private PearlReport normalizeReport(String content, PearlAnalyzeRequest request) {
         try {
             Map<String, Object> raw = objectMapper.readValue(extractJson(content), new TypeReference<Map<String, Object>>() {
             });
@@ -391,6 +392,7 @@ public class ArkVisionService {
             report.setSummary(safeString(raw.get("summary"), "已完成图片初筛，并根据当前照片给出估算结果。"));
             report.setReasons(toStringList(raw.get("reasons")));
             report.setSuggestions(toStringList(raw.get("suggestions")));
+            applyReverseCalibration(report, raw, content, request);
             return report;
         } catch (Exception error) {
             PearlReport fallback = new PearlReport();
@@ -412,6 +414,308 @@ public class ArkVisionService {
             fallback.setSuggestions(Arrays.asList("建议重新拍摄清晰照片后再次提交。"));
             fallback.setRawText(content);
             return fallback;
+        }
+    }
+
+    private void applyReverseCalibration(PearlReport report, Map<String, Object> raw, String content, PearlAnalyzeRequest request) {
+        if (report == null || !"真".equals(report.getAuthenticity())) {
+            return;
+        }
+        PearlAnalyzeContext context = request == null ? null : request.getContext();
+        int imageCount = request == null || request.getImages() == null ? 0 : request.getImages().size();
+        String mode = request == null ? "" : safeString(request.getMode(), "");
+        String evidenceText = buildEvidenceText(report, raw, content);
+        String type = safeString(firstValue(report.getPearlType(), report.getResult()), "");
+        double price = parsePositiveDouble(context == null ? "" : context.getPrice());
+        double diameter = parsePositiveDouble(context == null ? "" : context.getDiameter());
+        String channel = safeString(context == null ? "" : context.getChannel(), "");
+
+        List<String> signals = new ArrayList<String>();
+        int riskScore = 0;
+        double referenceMin = referenceMinPrice(type, diameter);
+        boolean highValueType = isHighValuePearlType(type);
+        boolean highRiskChannel = isHighRiskChannel(channel);
+        boolean veryHighRiskChannel = isVeryHighRiskChannel(channel);
+        boolean missingKeyEvidence = isMissingKeyEvidence(evidenceText, imageCount, mode);
+        boolean suspiciousVisual = hasSuspiciousVisualSignal(evidenceText);
+
+        if (price > 0 && referenceMin > 0) {
+            double ratio = price / referenceMin;
+            if (highValueType && ratio < 0.25) {
+                riskScore += 4;
+                signals.add("补充价格明显低于该品类与直径的常见入门参考价");
+            } else if (highValueType && ratio < 0.45) {
+                riskScore += 3;
+                signals.add("补充价格与标称高价值品类存在较大冲突");
+            } else if (highValueType && ratio < 0.65) {
+                riskScore += 2;
+                signals.add("补充价格低于该品类常见参考价，需谨慎看待真珠结论");
+            } else if (!highValueType && diameter >= 9 && price < 40 && highRiskChannel) {
+                riskScore += 2;
+                signals.add("大直径低价且渠道风险较高，存在仿珠或低质处理珠风险");
+            }
+        }
+        if (veryHighRiskChannel) {
+            riskScore += 2;
+            signals.add("购买/来源渠道属于高风险场景");
+        } else if (highRiskChannel) {
+            riskScore += 1;
+            signals.add("购买/来源渠道需要谨慎校准");
+        }
+        if (missingKeyEvidence) {
+            riskScore += 2;
+            signals.add("当前图片缺少孔口、微观纹理或多角度证据");
+        }
+        if (suspiciousVisual) {
+            riskScore += 2;
+            signals.add("图片或模型描述中出现过于光滑、浮光、几何过分规整等仿珠信号");
+        }
+
+        if (signals.isEmpty()) {
+            return;
+        }
+
+        boolean strongConflict = price > 0
+                && referenceMin > 0
+                && price / referenceMin < 0.35
+                && (highRiskChannel || missingKeyEvidence)
+                && (highValueType || diameter >= 9);
+        if (riskScore >= 6 || strongConflict) {
+            convertToImitationByReverseCalibration(report, raw, signals);
+            return;
+        }
+
+        int cap = riskScore >= 4 ? 70 : 78;
+        if (report.getConfidence() > cap) {
+            report.setConfidence(cap);
+        }
+        appendUnique(report.getReasons(), "反向校准：" + String.join("；", signals) + "，因此下调本次真珠判断可信度。");
+        appendUnique(report.getSuggestions(), "建议补拍孔口特写、强光纹理图，并结合线下检测复核低价或高风险渠道样品。");
+    }
+
+    private void convertToImitationByReverseCalibration(PearlReport report, Map<String, Object> raw, List<String> signals) {
+        String imitationType = safeString(report.getImitationType(), "");
+        if (!StringUtils.hasText(imitationType)) {
+            imitationType = inferImitationTypeFromText(buildEvidenceText(report, raw, ""));
+        }
+        report.setAuthenticity("假");
+        report.setImitationType(imitationType);
+        report.setResult(imitationType);
+        report.setPriceEstimate(null);
+        report.setConfidence(clamp(Math.min(report.getConfidence(), 72), 55, 78));
+        report.setAttributes(buildAttributes(raw, "假"));
+        List<Map<String, Object>> attributes = report.getAttributes() == null
+                ? new ArrayList<Map<String, Object>>()
+                : new ArrayList<Map<String, Object>>(report.getAttributes());
+        attributes.add(attribute("反向校准", "高风险", String.join("；", signals), report.getConfidence()));
+        report.setAttributes(attributes);
+        report.setSummary("图片初筛结合价格、渠道、直径与视觉证据后，假珠或处理珠风险较高。");
+        appendUnique(report.getReasons(), "反向校准：" + String.join("；", signals) + "，服务端已将结论校准为假珠风险。");
+        appendUnique(report.getSuggestions(), "请补充孔口特写和强光纹理照片；高价值交易前建议送专业机构检测。");
+    }
+
+    private String buildEvidenceText(PearlReport report, Map<String, Object> raw, String content) {
+        StringBuilder builder = new StringBuilder();
+        if (report != null) {
+            builder.append(" ").append(safeString(report.getResult(), ""));
+            builder.append(" ").append(safeString(report.getPearlType(), ""));
+            builder.append(" ").append(safeString(report.getImitationType(), ""));
+            builder.append(" ").append(safeString(report.getSummary(), ""));
+            for (String reason : report.getReasons() == null ? new ArrayList<String>() : report.getReasons()) {
+                builder.append(" ").append(reason);
+            }
+            for (Map<String, Object> attribute : report.getAttributes() == null ? new ArrayList<Map<String, Object>>() : report.getAttributes()) {
+                builder.append(" ").append(safeString(attribute.get("name"), ""));
+                builder.append(" ").append(safeString(attribute.get("value"), ""));
+                builder.append(" ").append(safeString(attribute.get("detail"), ""));
+            }
+        }
+        if (raw != null) {
+            builder.append(" ").append(String.valueOf(raw));
+        }
+        builder.append(" ").append(safeString(content, ""));
+        return builder.toString();
+    }
+
+    private boolean isHighValuePearlType(String type) {
+        String text = safeString(type, "");
+        return text.contains("澳白")
+                || text.contains("南洋")
+                || text.contains("Akoya")
+                || text.contains("AKOYA")
+                || text.contains("日本")
+                || text.contains("大溪地")
+                || text.contains("黑珍珠")
+                || text.contains("金珠")
+                || text.contains("海水");
+    }
+
+    private boolean isHighRiskChannel(String channel) {
+        String text = safeString(channel, "");
+        return text.contains("直播")
+                || text.contains("电商")
+                || text.contains("二手")
+                || text.contains("朋友")
+                || text.contains("旅游")
+                || text.contains("景区")
+                || text.contains("地摊")
+                || text.contains("其他");
+    }
+
+    private boolean isVeryHighRiskChannel(String channel) {
+        String text = safeString(channel, "");
+        return text.contains("旅游")
+                || text.contains("景区")
+                || text.contains("地摊")
+                || text.contains("直播")
+                || text.contains("二手");
+    }
+
+    private boolean isMissingKeyEvidence(String evidenceText, int imageCount, String mode) {
+        String text = safeString(evidenceText, "");
+        if (imageCount <= 1 || "quick".equals(mode)) {
+            return true;
+        }
+        return text.contains("未见孔口")
+                || text.contains("未包含孔口")
+                || text.contains("缺少孔口")
+                || text.contains("未见微观")
+                || text.contains("缺少纹理")
+                || text.contains("未见纹理")
+                || text.contains("没有孔口")
+                || text.contains("没有纹理");
+    }
+
+    private boolean hasSuspiciousVisualSignal(String evidenceText) {
+        String text = safeString(evidenceText, "");
+        return text.contains("过于光滑")
+                || text.contains("机械")
+                || text.contains("完美正圆")
+                || text.contains("绝对正圆")
+                || text.contains("浮光")
+                || text.contains("镜面")
+                || text.contains("单一")
+                || text.contains("呆板")
+                || text.contains("涂层")
+                || text.contains("剥落")
+                || text.contains("气泡")
+                || text.contains("染料")
+                || text.contains("色斑")
+                || text.contains("色块");
+    }
+
+    private String inferImitationTypeFromText(String evidenceText) {
+        String text = safeString(evidenceText, "");
+        if (text.contains("塑料")) return "塑料仿珠";
+        if (text.contains("玻璃") || text.contains("气泡")) return "玻璃仿珠";
+        if (text.contains("染") || text.contains("覆膜") || text.contains("涂层")) return "染色/覆膜珠";
+        if (text.contains("施家")) return "施家珍珠";
+        return "贝珠";
+    }
+
+    private double referenceMinPrice(String pearlType, double diameter) {
+        String type = safeString(pearlType, "淡水珍珠");
+        double size = diameter > 0 ? diameter : 9.5;
+        if (type.contains("澳白") || type.contains("南洋白")) {
+            if (size >= 14) return 15000;
+            if (size >= 13) return 8000;
+            if (size >= 12) return 5000;
+            if (size >= 11) return 3000;
+            if (size >= 10) return 1500;
+            if (size >= 9) return 800;
+            return 500;
+        }
+        if (type.contains("金珠")) {
+            if (size >= 14) return 12000;
+            if (size >= 13) return 7000;
+            if (size >= 12) return 4000;
+            if (size >= 11) return 2500;
+            if (size >= 10) return 1200;
+            if (size >= 9) return 600;
+            return 400;
+        }
+        if (type.contains("大溪地") || type.contains("黑珍珠")) {
+            if (size >= 14) return 10000;
+            if (size >= 13) return 6000;
+            if (size >= 12) return 3500;
+            if (size >= 11) return 2000;
+            if (size >= 10) return 1000;
+            if (size >= 9) return 500;
+            return 300;
+        }
+        if (type.contains("Akoya") || type.contains("AKOYA") || type.contains("日本")) {
+            if (size >= 9) return 1200;
+            if (size >= 8) return 600;
+            if (size >= 7) return 300;
+            if (size >= 6) return 150;
+            return 80;
+        }
+        if (type.contains("海水")) {
+            if (size >= 11) return 2000;
+            if (size >= 10) return 1000;
+            if (size >= 9) return 500;
+            return 300;
+        }
+        if (type.contains("爱迪生")) {
+            if (size >= 14) return 1000;
+            if (size >= 13) return 600;
+            if (size >= 12) return 300;
+            if (size >= 11) return 150;
+            if (size >= 10) return 80;
+            if (size >= 9) return 50;
+            return 30;
+        }
+        if (type.contains("马贝")) {
+            if (size >= 17) return 1800;
+            if (size >= 16) return 1000;
+            if (size >= 15) return 600;
+            if (size >= 14) return 350;
+            return 200;
+        }
+        if (size >= 10) return 200;
+        if (size >= 9) return 120;
+        if (size >= 8) return 80;
+        if (size >= 7) return 60;
+        if (size >= 6) return 40;
+        return 20;
+    }
+
+    private double parsePositiveDouble(String value) {
+        if (!StringUtils.hasText(value)) {
+            return 0;
+        }
+        String text = value.replace(",", "").replace("，", "");
+        StringBuilder number = new StringBuilder();
+        boolean seenDigit = false;
+        boolean seenDot = false;
+        for (int index = 0; index < text.length(); index += 1) {
+            char ch = text.charAt(index);
+            if (Character.isDigit(ch)) {
+                number.append(ch);
+                seenDigit = true;
+            } else if (ch == '.' && !seenDot) {
+                number.append(ch);
+                seenDot = true;
+            } else if (seenDigit) {
+                break;
+            }
+        }
+        if (!seenDigit) {
+            return 0;
+        }
+        try {
+            return Double.parseDouble(number.toString());
+        } catch (NumberFormatException error) {
+            return 0;
+        }
+    }
+
+    private void appendUnique(List<String> list, String value) {
+        if (list == null || !StringUtils.hasText(value)) {
+            return;
+        }
+        if (!list.contains(value)) {
+            list.add(value);
         }
     }
 
@@ -948,14 +1252,16 @@ public class ArkVisionService {
         return Math.max(min, Math.min(max, value));
     }
 
-    private String buildPrompt(String mode) {
+    private String buildPrompt(String mode, PearlAnalyzeContext context) {
         String modeHint = "quick".equals(mode) ? "用户使用快速鉴定，可能只有 1 张图片。" : "用户使用完整鉴定，可能包含多角度图片。";
         return String.join("\n",
                 "你是一名谨慎的珍珠图片初筛助手。请根据用户上传的珍珠照片做初步判断。",
                 modeHint,
+                buildSupplementContextPrompt(context),
                 "必须只输出 JSON，不要输出 Markdown，不要输出额外解释。",
                 "除最终 JSON 字段名外，不要输出英文单词、英文说明或英文推理过程；所有可读说明必须使用中文。",
                 "不要声称自己出具权威鉴定证书。结果只能是图片初筛建议。",
+                buildStagedDecisionPrompt(),
                 "第一步必须判断图片中是否存在明确珍珠主体。若图片不是珍珠、没有珍珠、主体与珍珠鉴定无关，必须输出 pearlDetected=false，authenticity=非珍珠，result=未检测到珍珠，confidence=0，不要继续猜淡水珍珠、海水珍珠或仿珠类型。",
                 "只有 pearlDetected=true 时，才进入真假、类型、亮度、圆度、瑕疵和颜色评估。",
                 "即使珍珠图片不够完美，也必须基于可见信息给出估算值。不要输出“待复核”“无法判断”“不确定”等状态，可用较低 confidence 表达不确定性。",
@@ -965,6 +1271,12 @@ public class ArkVisionService {
                 "真珍珠类型只能从：淡水珍珠、爱迪生、海水珍珠、澳白、Akoya、南洋白珠、南洋金珠、南洋大溪地、大溪地黑珍珠、马贝 中选择。",
                 "假珠类型只能从：塑料仿珠、玻璃仿珠、贝珠、施家珍珠、染色/覆膜珠 中选择。",
                 "只有 authenticity=真 且 pearlDetected=true 时才输出价格估算 priceEstimate；authenticity=假 或 非珍珠时 priceEstimate 必须为 null。",
+                "如果用户补充了价格、渠道或直径：必须把这些信息作为辅助校准因素写入 reasons 或 suggestions 中，但不能代替图片证据。",
+                "低价大直径、高风险渠道、标称高价值品类但价格明显不匹配时，要提高仿珠/贝珠/玻璃仿珠/塑料仿珠的警惕，并适当降低 confidence。",
+                "正规线下珠宝店、珍珠市场或可信渠道只能作为轻微信号，不可仅凭渠道判真；直播间、电商低价、旅游景区、地摊、二手来源要更谨慎。",
+                "用户填写直径时，priceEstimate.sizeReference 优先使用该直径；未填写时再按图片估算或默认 9-10mm。",
+                "如果只有正面整体图、未见孔口和微观纹理，不要给出 85 以上 confidence；若同时存在低价或高风险渠道，优先把 confidence 控制在 70 以下。",
+                "如果图片看起来像珍珠但缺少天然生长纹、孔口层状结构或深邃晕彩中的至少两项证据，不要轻易判为真。",
                 "亮度只能从：极强光、强光（高光）、中光、弱光 中选择。",
                 "圆度只能从：正圆、近正圆、近圆、椭圆、扁圆、水滴、异形（巴洛克） 中选择。",
                 "瑕疵等级只能从：A 无瑕、B 微瑕、C 小瑕、D 瑕疵、E 重瑕 中选择。",
@@ -990,6 +1302,49 @@ public class ArkVisionService {
                 "  \"reasons\": [\"依据1：必须引用纹理/孔口/光泽/颜色/轮廓中的一个\", \"依据2：必须引用另一视觉维度\", \"依据3：说明不确定性或反向证据\"],",
                 "  \"suggestions\": [\"建议1\", \"建议2\"]",
                 "}"
+        );
+    }
+
+    private String buildStagedDecisionPrompt() {
+        return String.join("\n",
+                "分阶段判定流程，必须按顺序完成，不允许直接根据整体观感一步到位下结论：",
+                "阶段1：图片有效性。先判断是否有明确珍珠主体、主体占比、清晰度、是否有过曝/美颜/滤镜；如果没有珍珠主体，立即按非珍珠输出。",
+                "阶段2：可用证据枚举。逐项检查表面纹理、孔口/打孔处、光泽反光、颜色分布、形状轮廓、尺寸/价格/渠道冲突。没有看到的维度必须标记为未见证据，不能编造。",
+                "阶段3：真假风险对照。分别列出支持真珍珠的证据和支持仿珠/处理珠的证据；只有支持真珍珠的证据明显多于反向证据时，才输出 authenticity=真。",
+                "阶段4：品类和价格校准。先按视觉证据估计品类，再用用户填写的直径、价格和渠道检查是否与市场价冲突；冲突明显时降低 confidence，并优先考虑假珠或处理珠。",
+                "阶段5：最终结论。结论必须来自前面证据，不确定时降低 confidence，不能用高置信度掩盖证据不足。",
+                "输出 JSON 时不要展开完整思维链，但 reasons 必须按证据顺序给出：第一条写核心视觉证据，第二条写反向证据或缺失证据，第三条写价格/渠道/直径校准或不确定性。"
+        );
+    }
+
+    private String buildSupplementContextPrompt(PearlAnalyzeContext context) {
+        if (context == null) {
+            return "用户未填写价格、渠道、直径等补充信息，请仅依据图片和通用知识库判断。";
+        }
+        String price = safeString(context.getPrice(), "");
+        String channel = safeString(context.getChannel(), "");
+        String diameter = safeString(context.getDiameter(), "");
+        if (!StringUtils.hasText(price) && !StringUtils.hasText(channel) && !StringUtils.hasText(diameter)) {
+            return "用户未填写价格、渠道、直径等补充信息，请仅依据图片和通用知识库判断。";
+        }
+        List<String> items = new ArrayList<String>();
+        if (StringUtils.hasText(price)) {
+            items.add("用户填写价格：" + price + " 元");
+        }
+        if (StringUtils.hasText(channel)) {
+            items.add("用户填写渠道：" + channel);
+        }
+        if (StringUtils.hasText(diameter)) {
+            items.add("用户填写直径：" + diameter + " mm");
+        }
+        return String.join("\n",
+                "用户补充信息（非必填、自述信息，仅作辅助校准，不可替代图片证据）：",
+                String.join("；", items),
+                "使用方式：",
+                "- 价格用于检查品类与市场价是否明显冲突。例如大直径澳白、Akoya、南洋金珠、大溪地黑珍珠若价格明显低于常识，应提高仿珠/贝珠/玻璃仿珠/塑料仿珠或优化处理的可能性。",
+                "- 渠道用于风险校准。直播间、电商低价、旅游景区/地摊、二手来源更容易出现低价仿珠或处理珠；线下珠宝店、珍珠市场/批发也不能直接判真，只能略微提升可信度。",
+                "- 直径用于价格和品类校准。大直径真海水珠通常价格显著上升；低价大直径且图片缺少天然纹理/孔口证据时，应更谨慎判假。",
+                "- 如果补充信息和图片证据冲突，请优先相信图片证据，并在 reasons 中说明冲突点。"
         );
     }
 
